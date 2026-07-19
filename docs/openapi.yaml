@@ -1,0 +1,186 @@
+openapi: 3.1.0
+info:
+  title: smartEngin Licence & buy — Licensing API
+  version: "1.0.0"
+  description: >
+    Developer-facing licensing endpoints of the smartEngin Licence & buy server
+    (WordPress REST namespace `sels/v1`). These are the endpoints a licensed product
+    uses to activate a site, re-validate a key, and receive updates. The shop's
+    checkout, webhook, portal, account and invoice routes share the namespace but are
+    internal and intentionally not documented here.
+
+    A licence key is a random, server-stored token — the credential itself. There is
+    nothing to decrypt client-side. Enforcement (activation limits, the update channel,
+    signed downloads) lives only on the server. Clients should gate features fail-open
+    on the last known status.
+  license:
+    name: GPL-2.0-or-later (library) / example snippets are free to use
+    url: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
+servers:
+  - url: https://smartengin.de/wp-json/sels/v1
+    description: >
+      Current licence server. NOTE: the server will later move to a dedicated domain;
+      keep this base URL in a single place in your integration.
+tags:
+  - name: licensing
+    description: Activation, validation, and updates for licensed products.
+paths:
+  /activate:
+    post:
+      tags: [licensing]
+      summary: Register this instance against a licence key (idempotent).
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [key, product, instance]
+              properties:
+                key: { type: string, example: "XXXX-XXXX-XXXX-XXXX-XXXX" }
+                product: { type: string, example: "acme-gallery-pro" }
+                instance: { type: string, example: "example.com", description: "Normalized host for domains: no scheme, no www, lower-case." }
+                instance_type: { type: string, enum: [domain, device], default: domain }
+                label: { type: string, description: "Optional human label." }
+      responses:
+        "200":
+          description: Activated (or already active on this instance).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ActivationResult" }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+        "409": { $ref: "#/components/responses/Error" }
+        "429": { $ref: "#/components/responses/Error" }
+  /deactivate:
+    post:
+      tags: [licensing]
+      summary: Free this instance's activation slot (idempotent, always succeeds).
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [key, instance]
+              properties:
+                key: { type: string }
+                instance: { type: string }
+                instance_type: { type: string, enum: [domain, device], default: domain }
+      responses:
+        "200":
+          description: Slot released.
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  success: { type: boolean, example: true }
+  /validate:
+    post:
+      tags: [licensing]
+      summary: Re-check a key's current status. Never blocks (unknown key => valid:false).
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [key, product]
+              properties:
+                key: { type: string }
+                product: { type: string }
+                instance: { type: string }
+                instance_type: { type: string, enum: [domain, device], default: domain }
+      responses:
+        "200":
+          description: Current status (HTTP 200 even for an unknown key).
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/ValidationResult" }
+  /update:
+    get:
+      tags: [licensing]
+      summary: WordPress update-channel check. Tolerant — returns no-update on any doubt.
+      parameters:
+        - { name: key, in: query, required: true, schema: { type: string } }
+        - { name: product, in: query, required: true, schema: { type: string } }
+        - { name: version, in: query, required: true, schema: { type: string }, description: "Installed version." }
+        - { name: instance, in: query, required: false, schema: { type: string } }
+        - { name: instance_type, in: query, required: false, schema: { type: string, enum: [domain, device], default: domain } }
+      responses:
+        "200":
+          description: Either "no update" or an available update with a signed package URL.
+          content:
+            application/json:
+              schema:
+                oneOf:
+                  - $ref: "#/components/schemas/NoUpdate"
+                  - $ref: "#/components/schemas/UpdateAvailable"
+  /download:
+    get:
+      tags: [licensing]
+      summary: Stream the update package for a signed token from /update.
+      parameters:
+        - { name: token, in: query, required: true, schema: { type: string }, description: "Signed, short-lived token issued by /update." }
+      responses:
+        "200":
+          description: The package file stream (application/zip).
+          content:
+            application/zip:
+              schema: { type: string, format: binary }
+        "400": { $ref: "#/components/responses/Error" }
+        "403": { $ref: "#/components/responses/Error" }
+        "404": { $ref: "#/components/responses/Error" }
+components:
+  responses:
+    Error:
+      description: Error result.
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+  schemas:
+    Error:
+      type: object
+      properties:
+        success: { type: boolean, example: false }
+        error: { type: string, description: "Machine-readable slug, e.g. license_not_found, limit_reached, rate_limited." }
+        message: { type: string, description: "Human-readable message." }
+    ActivationResult:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        status: { type: string, enum: [active, expired, refunded, disabled, unknown] }
+        valid_until:
+          type: [string, "null"]
+          description: "MySQL datetime, or null for a lifetime licence."
+        activations_left:
+          type: [integer, "null"]
+          description: "Remaining slots, or null when unlimited."
+    ValidationResult:
+      type: object
+      properties:
+        valid: { type: boolean, description: "True only when active AND not past valid_until." }
+        status: { type: string, enum: [active, expired, refunded, disabled, unknown] }
+        valid_until: { type: [string, "null"] }
+        activations_left: { type: [integer, "null"] }
+    NoUpdate:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        update: { type: boolean, example: false }
+    UpdateAvailable:
+      type: object
+      properties:
+        success: { type: boolean, example: true }
+        update: { type: boolean, example: true }
+        slug: { type: string }
+        new_version: { type: string }
+        package: { type: string, format: uri, description: "Signed, short-lived /download URL." }
+        requires: { type: string }
+        requires_php: { type: string }
+        tested: { type: string }
+        changelog_url: { type: string, format: uri }
+        homepage_url: { type: string, format: uri }
+        sha256: { type: string, description: "Package checksum; present when computable." }

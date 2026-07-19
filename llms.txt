@@ -1,0 +1,22 @@
+# smartEngin Licence Client
+
+> Build-free PHP library and REST API to license and auto-update your own WordPress
+> plugin (or any software) through a smartEngin Licence & buy server. A licence key is
+> a random server-stored token; enforcement is server-side; clients gate features
+> fail-open on the last known status. Policy B+C: no updates without a valid key,
+> premium features off but free core and data intact, never "dead without key".
+
+## Docs
+
+- [Integration guide](docs/integration-guide.md): step-by-step — register product, bundle library, one Self_Client instance, licence panel, gate features, updates.
+- [REST reference](docs/rest-reference.md): endpoints /activate, /deactivate, /validate, /update, /download with parameters and responses.
+- [OpenAPI spec](docs/openapi.yaml): machine-readable API for codegen and non-WordPress clients.
+- [What licensing does](docs/what-licensing-does.md): honest scope (GPL reality, server-side enforcement, fail-open) plus a ready "give this to your AI" prompt.
+
+## Example
+
+- [Reference plugin](example/smartengin-licence-example/): minimal working WordPress plugin with a licence panel, one gated premium feature, and the update hook.
+
+## Library
+
+- [Loader](self-client.php) and [class](includes/class-self-client.php): the Self_Client library itself.
