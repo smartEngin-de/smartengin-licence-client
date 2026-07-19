@@ -8,11 +8,11 @@
  *
  *     require_once __DIR__ . '/lib/smartengin-licence-client/self-client.php';
  *     new Self_Client( array(
- *         'server_url'  => 'https://lizenz.smartengin.de',
- *         'slug'        => 'smartengin-forms-pro',   // = product slug on the server
- *         'plugin_file' => SMARTENGIN_FORMS_PRO_FILE, // main plugin file (__FILE__)
- *         'version'     => SMARTENGIN_FORMS_PRO_VERSION,
- *         'text_domain' => 'smartengin-forms-pro',
+ *         'server_url'  => 'https://your-licence-server.example', // your Licence & buy server
+ *         'slug'        => 'your-product-slug',   // = product slug on the server
+ *         'plugin_file' => __FILE__,              // your plugin's main file
+ *         'version'     => '1.0.0',               // your installed version
+ *         'text_domain' => 'your-product-slug',
  *     ) );
  *
  * The library is deliberately generic: it never touches product internals, so
