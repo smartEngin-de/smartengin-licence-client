@@ -9,18 +9,33 @@ info:
     checkout, webhook, portal, account and invoice routes share the namespace but are
     internal and intentionally not documented here.
 
-    A licence key is a random, server-stored token — the credential itself. There is
-    nothing to decrypt client-side. Enforcement (activation limits, the update channel,
-    signed downloads) lives only on the server. Clients should gate features fail-open
-    on the last known status.
+
+    Authentication model: these endpoints use **no authentication scheme** — no API-key
+    header, no bearer token, no OAuth. The licence **key is the credential** and is sent
+    as an ordinary request parameter (`key`); the server checks that the key exists and
+    belongs to the given `product`. This is why the global `security` is an empty list.
+
+
+    Transport & limits: HTTPS is required (except on `local`/`development` server
+    environments). A per-IP + per-key sliding rate limit applies (default 30
+    requests/minute); exceeding it returns HTTP 429 with `error: rate_limited`.
+
+
+    A licence key is a random, server-stored token — there is nothing to decrypt
+    client-side. Enforcement (activation limits, the update channel, signed downloads)
+    lives only on the server. Clients should gate features fail-open on the last known
+    status.
   license:
     name: GPL-2.0-or-later (library) / example snippets are free to use
     url: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
 servers:
   - url: https://smartengin.de/wp-json/sels/v1
     description: >
-      Current licence server. NOTE: the server will later move to a dedicated domain;
+      Current licence server. NOTE: the server may later move to a dedicated domain;
       keep this base URL in a single place in your integration.
+# No global security scheme: the licence key itself is the credential, passed as the
+# `key` parameter (see info.description). An empty list states this explicitly.
+security: []
 tags:
   - name: licensing
     description: Activation, validation, and updates for licensed products.
@@ -48,11 +63,24 @@ paths:
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ActivationResult" }
-        "400": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "404": { $ref: "#/components/responses/Error" }
-        "409": { $ref: "#/components/responses/Error" }
-        "429": { $ref: "#/components/responses/Error" }
+              example:
+                success: true
+                status: active
+                valid_until: "2027-01-31 23:59:59"
+                activations_left: 2
+        "400":
+          description: "`bad_request` — missing key or instance."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "403":
+          description: "`license_inactive` (refunded/disabled), `trial_used_on_site` (a free trial was already used on this website), or `https_required`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "404":
+          description: "`product_not_found` (unknown slug) or `license_not_found` (key unknown or not for this product)."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "409":
+          description: "`limit_reached` — the licence's activation limit is reached."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /deactivate:
     post:
       tags: [licensing]
@@ -70,13 +98,16 @@ paths:
                 instance_type: { type: string, enum: [domain, device], default: domain }
       responses:
         "200":
-          description: Slot released.
+          description: Slot released (also returned when nothing matched).
           content:
             application/json:
               schema:
                 type: object
                 properties:
                   success: { type: boolean, example: true }
+              example: { success: true }
+        "403": { $ref: "#/components/responses/HttpsRequired" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /validate:
     post:
       tags: [licensing]
@@ -95,10 +126,21 @@ paths:
                 instance_type: { type: string, enum: [domain, device], default: domain }
       responses:
         "200":
-          description: Current status (HTTP 200 even for an unknown key).
+          description: >
+            Current status. Always HTTP 200 — even for an unknown key, which returns
+            `valid:false` and `status:"unknown"` rather than an error.
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ValidationResult" }
+              examples:
+                valid:
+                  summary: A valid, active licence
+                  value: { valid: true, status: active, valid_until: "2027-01-31 23:59:59", activations_left: 2 }
+                unknown:
+                  summary: Unknown key (still HTTP 200)
+                  value: { valid: false, status: unknown }
+        "403": { $ref: "#/components/responses/HttpsRequired" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /update:
     get:
       tags: [licensing]
@@ -111,42 +153,82 @@ paths:
         - { name: instance_type, in: query, required: false, schema: { type: string, enum: [domain, device], default: domain } }
       responses:
         "200":
-          description: Either "no update" or an available update with a signed package URL.
+          description: >
+            Either "no update" or an available update with a signed package URL. Any
+            missing entitlement, unknown key/product, or "already current" yields the
+            no-update form (still HTTP 200), so the client never breaks.
           content:
             application/json:
               schema:
                 oneOf:
                   - $ref: "#/components/schemas/NoUpdate"
                   - $ref: "#/components/schemas/UpdateAvailable"
+              examples:
+                no_update:
+                  summary: No update available
+                  value: { success: true, update: false }
+                update_available:
+                  summary: Update available
+                  value:
+                    success: true
+                    update: true
+                    slug: acme-gallery-pro
+                    new_version: "1.1.0"
+                    package: "https://smartengin.de/wp-json/sels/v1/download?token=eyJ…"
+                    requires: "6.4"
+                    requires_php: "7.4"
+                    tested: "6.4"
+                    changelog_url: "https://example.com/changelog"
+                    homepage_url: "https://example.com"
+                    sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        "403": { $ref: "#/components/responses/HttpsRequired" }
+        "429": { $ref: "#/components/responses/RateLimited" }
   /download:
     get:
       tags: [licensing]
       summary: Stream the update package for a signed token from /update.
+      description: >
+        The `token` is produced by `/update`; you do not build it yourself. It is a
+        signed (HMAC), URL-safe, short-lived token — treat it as opaque. On success the
+        endpoint streams the ZIP and exits; on failure it returns a JSON error.
       parameters:
-        - { name: token, in: query, required: true, schema: { type: string }, description: "Signed, short-lived token issued by /update." }
+        - { name: token, in: query, required: true, schema: { type: string }, description: "Signed, short-lived token issued by /update. Opaque; expires quickly." }
       responses:
         "200":
           description: The package file stream (application/zip).
           content:
             application/zip:
               schema: { type: string, format: binary }
-        "400": { $ref: "#/components/responses/Error" }
-        "403": { $ref: "#/components/responses/Error" }
-        "404": { $ref: "#/components/responses/Error" }
+        "400":
+          description: "`bad_token` — missing or malformed token."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "403":
+          description: "`token_expired` (link no longer valid), `license_inactive`, or `https_required`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+        "404":
+          description: "`license_not_found`, `no_package` (product has no package), or `file_missing`."
+          content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
 components:
   responses:
-    Error:
-      description: Error result.
+    RateLimited:
+      description: "`rate_limited` — too many requests (per-IP + per-key, default 30/min)."
       content:
         application/json:
           schema: { $ref: "#/components/schemas/Error" }
+          example: { success: false, error: rate_limited, message: "Too many requests. Please try again shortly." }
+    HttpsRequired:
+      description: "`https_required` — the request was made over plain HTTP in production."
+      content:
+        application/json:
+          schema: { $ref: "#/components/schemas/Error" }
+          example: { success: false, error: https_required, message: "HTTPS is required." }
   schemas:
     Error:
       type: object
       properties:
         success: { type: boolean, example: false }
-        error: { type: string, description: "Machine-readable slug, e.g. license_not_found, limit_reached, rate_limited." }
-        message: { type: string, description: "Human-readable message." }
+        error: { type: string, description: "Machine-readable slug, e.g. license_not_found, limit_reached, rate_limited.", example: license_not_found }
+        message: { type: string, description: "Human-readable message.", example: "Unknown licence for this product." }
     ActivationResult:
       type: object
       properties:
