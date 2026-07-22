@@ -135,6 +135,31 @@ update-integration filters. You do not call the REST API yourself.
 | `version` | yes | Installed version. Usually your version constant. |
 | `option_name` | no | `wp_options` key for the stored state. Defaults to `<slug_with_underscores>_license`. |
 | `text_domain` | no | For the library's own UI strings. |
+| `type` | no | `plugin` (default) or `theme`. See below. |
+| `stylesheet` | theme only | The theme directory slug. Defaults to `get_stylesheet()`. |
+
+### Selling a theme instead of a plugin
+
+The same library licenses and auto-updates a **WordPress theme**. On the server, set the
+product's **Platform** to *WordPress theme (.zip)* and upload the theme `.zip`. In the
+theme's `functions.php`, create the client with `type => 'theme'` and pass the stylesheet
+and version instead of a plugin file:
+
+```php
+require_once get_stylesheet_directory() . '/lib/smartengin-licence-client/self-client.php';
+
+$GLOBALS['acme_theme_licence'] = new Self_Client( array(
+	'server_url' => 'https://your-licence-server.example',
+	'slug'       => 'acme-theme',                 // = product slug on the server
+	'type'       => 'theme',
+	'stylesheet' => get_stylesheet(),             // theme directory slug
+	'version'    => wp_get_theme()->get( 'Version' ),
+) );
+```
+
+Everything else — activation, the licence panel, fail-open validation, SHA-256-verified
+downloads — is identical. Updates then appear on **Appearance → Themes / Dashboard →
+Updates** instead of the Plugins screen.
 
 ---
 

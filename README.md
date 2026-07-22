@@ -1,10 +1,12 @@
 # smartEngin Licence Client
 
 A small, **build-free** PHP library to license and auto-update your WordPress plugin
-through a [smartEngin Licence & buy](https://smartengin.de) server. Drop it in, create
-one object, done — no npm, no build step.
+**or theme** through a [smartEngin Licence & buy](https://smartengin.de) server. Drop it
+in, create one object, done — no npm, no build step.
 
-> **Sell your own plugin with licensing, updates, and a licence panel — in ~15 lines.**
+> **Sell your own plugin or theme with licensing, updates, and a licence panel — in ~15 lines.**
+> For a theme, add `'type' => 'theme'` (see the
+> [integration guide](docs/integration-guide.md#selling-a-theme-instead-of-a-plugin)).
 
 ## Quickstart
 

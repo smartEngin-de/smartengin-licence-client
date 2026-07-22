@@ -35,8 +35,14 @@ class Self_Client {
 	/** @var string plugin_basename() of the host plugin. */
 	private $basename;
 
-	/** @var string Installed version of the host plugin. */
+	/** @var string Installed version of the host plugin/theme. */
 	private $version;
+
+	/** @var string Product type: 'plugin' (default) or 'theme'. */
+	private $type = 'plugin';
+
+	/** @var string Theme stylesheet (directory) slug when type is 'theme'. */
+	private $stylesheet = '';
 
 	/** @var string wp_options key holding the licence state. */
 	private $option_name;
@@ -54,11 +60,21 @@ class Self_Client {
 	 * @param array $config server_url, slug, plugin_file, version[, option_name].
 	 */
 	public function __construct( array $config ) {
-		$this->server_url  = isset( $config['server_url'] ) ? untrailingslashit( (string) $config['server_url'] ) : '';
-		$this->slug        = isset( $config['slug'] ) ? sanitize_key( $config['slug'] ) : '';
-		$this->plugin_file = isset( $config['plugin_file'] ) ? (string) $config['plugin_file'] : '';
-		$this->version     = isset( $config['version'] ) ? (string) $config['version'] : '';
-		$this->basename    = $this->plugin_file ? plugin_basename( $this->plugin_file ) : '';
+		$this->server_url = isset( $config['server_url'] ) ? untrailingslashit( (string) $config['server_url'] ) : '';
+		$this->slug       = isset( $config['slug'] ) ? sanitize_key( $config['slug'] ) : '';
+		$this->version    = isset( $config['version'] ) ? (string) $config['version'] : '';
+		$this->type       = ( isset( $config['type'] ) && 'theme' === $config['type'] ) ? 'theme' : 'plugin';
+
+		if ( 'theme' === $this->type ) {
+			// A theme identifies itself by its stylesheet (directory) slug.
+			$this->stylesheet = ( isset( $config['stylesheet'] ) && '' !== (string) $config['stylesheet'] )
+				? (string) $config['stylesheet']
+				: ( function_exists( 'get_stylesheet' ) ? (string) get_stylesheet() : '' );
+			$this->basename = $this->stylesheet; // Identity key used throughout.
+		} else {
+			$this->plugin_file = isset( $config['plugin_file'] ) ? (string) $config['plugin_file'] : '';
+			$this->basename    = $this->plugin_file ? plugin_basename( $this->plugin_file ) : '';
+		}
 
 		$base                   = str_replace( '-', '_', $this->slug );
 		$this->option_name      = isset( $config['option_name'] ) ? (string) $config['option_name'] : $base . '_license';
@@ -67,6 +83,9 @@ class Self_Client {
 
 		if ( '' === $this->slug || '' === $this->server_url ) {
 			return; // Misconfigured – stay inert rather than error.
+		}
+		if ( 'theme' === $this->type && '' === $this->stylesheet ) {
+			return; // Theme misconfigured (no stylesheet) – stay inert.
 		}
 
 		// AJAX (backend buttons).
@@ -79,16 +98,22 @@ class Self_Client {
 			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', $this->cron_hook );
 		}
 
-		// WordPress update integration (C2).
-		add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'filter_update_plugins' ) );
-		add_filter( 'plugins_api', array( $this, 'plugins_api' ), 10, 3 );
+		// WordPress update integration (C2) – plugin OR theme update channel.
+		if ( 'theme' === $this->type ) {
+			add_filter( 'pre_set_site_transient_update_themes', array( $this, 'filter_update_themes' ) );
+			add_filter( 'themes_api', array( $this, 'themes_api' ), 10, 3 );
+			// Themes have no deactivation hook; clean cron when the theme is switched away.
+			add_action( 'switch_theme', array( $this, 'on_plugin_deactivate' ) );
+		} else {
+			add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'filter_update_plugins' ) );
+			add_filter( 'plugins_api', array( $this, 'plugins_api' ), 10, 3 );
+			// Self-cleanup when the host plugin is deactivated.
+			if ( $this->basename ) {
+				register_deactivation_hook( $this->plugin_file, array( $this, 'on_plugin_deactivate' ) );
+			}
+		}
 		add_filter( 'upgrader_pre_download', array( $this, 'verify_download' ), 10, 4 );
 		add_action( 'upgrader_process_complete', array( $this, 'flush_update_cache' ), 10, 0 );
-
-		// Self-cleanup when the host plugin is deactivated.
-		if ( $this->basename ) {
-			register_deactivation_hook( $this->plugin_file, array( $this, 'on_plugin_deactivate' ) );
-		}
 	}
 
 	/* ======================================================================
@@ -450,6 +475,92 @@ class Self_Client {
 	}
 
 	/**
+	 * Inject our update into the THEME update transient. Theme entries are arrays
+	 * (not objects) keyed by the stylesheet slug — this is the theme equivalent of
+	 * filter_update_plugins().
+	 *
+	 * @param mixed $transient Update transient (object) or empty.
+	 * @return mixed
+	 */
+	public function filter_update_themes( $transient ) {
+		if ( ! is_object( $transient ) || empty( $transient->checked ) ) {
+			return $transient;
+		}
+
+		$info = $this->check_update();
+
+		// Version WordPress currently sees installed (prefer it over the captured
+		// constant, which can still hold the OLD number right after an update).
+		$installed = ! empty( $transient->checked[ $this->stylesheet ] )
+			? (string) $transient->checked[ $this->stylesheet ]
+			: $this->version;
+
+		if ( ! empty( $info['update'] ) && version_compare( $installed, (string) $info['new_version'], '<' ) ) {
+			$transient->response[ $this->stylesheet ] = array(
+				'theme'        => $this->stylesheet,
+				'new_version'  => (string) $info['new_version'],
+				'url'          => isset( $info['homepage_url'] ) ? (string) $info['homepage_url'] : '',
+				'package'      => isset( $info['package'] ) ? (string) $info['package'] : '',
+				'requires'     => isset( $info['requires'] ) ? (string) $info['requires'] : '',
+				'requires_php' => isset( $info['requires_php'] ) ? (string) $info['requires_php'] : '',
+			);
+			unset( $transient->no_update[ $this->stylesheet ] );
+		} else {
+			// Signals "up to date" so WordPress shows no false update.
+			$transient->no_update[ $this->stylesheet ] = array(
+				'theme'       => $this->stylesheet,
+				'new_version' => $installed,
+				'url'         => '',
+				'package'     => '',
+			);
+		}
+
+		return $transient;
+	}
+
+	/**
+	 * Provide the theme "View version details" popup data (theme_information).
+	 *
+	 * @param mixed  $result Default result.
+	 * @param string $action API action.
+	 * @param object $args   Query args.
+	 * @return mixed
+	 */
+	public function themes_api( $result, $action, $args ) {
+		if ( 'theme_information' !== $action || empty( $args->slug ) || $args->slug !== $this->stylesheet ) {
+			return $result;
+		}
+
+		$info    = $this->check_update();
+		$version = ! empty( $info['update'] ) ? (string) $info['new_version'] : $this->version;
+		$theme   = function_exists( 'wp_get_theme' ) ? wp_get_theme( $this->stylesheet ) : null;
+		$exists  = ( $theme && $theme->exists() );
+
+		$changelog = isset( $info['changelog_url'] ) && $info['changelog_url']
+			? sprintf(
+				/* translators: %s: changelog URL */
+				__( 'See the full changelog: %s', 'smartengin-licence-client' ),
+				'<a href="' . esc_url( $info['changelog_url'] ) . '" target="_blank" rel="noopener">' . esc_html( $info['changelog_url'] ) . '</a>'
+			)
+			: __( 'No changelog available.', 'smartengin-licence-client' );
+
+		$obj                = new stdClass();
+		$obj->name          = $exists ? $theme->get( 'Name' ) : $this->slug;
+		$obj->slug          = $this->stylesheet;
+		$obj->version       = $version;
+		$obj->author        = $exists ? wp_strip_all_tags( $theme->get( 'Author' ) ) : '';
+		$obj->requires      = isset( $info['requires'] ) ? (string) $info['requires'] : '';
+		$obj->requires_php  = isset( $info['requires_php'] ) ? (string) $info['requires_php'] : '';
+		$obj->download_link = isset( $info['package'] ) ? (string) $info['package'] : '';
+		$obj->sections      = array(
+			'description' => $exists ? $theme->get( 'Description' ) : '',
+			'changelog'   => $changelog,
+		);
+
+		return $obj;
+	}
+
+	/**
 	 * Verify the downloaded update against the server-provided SHA-256 (E9).
 	 *
 	 * Hooked on `upgrader_pre_download`. Only acts on this product's own update
@@ -466,7 +577,11 @@ class Self_Client {
 	 * @return mixed False, a local file path, or WP_Error.
 	 */
 	public function verify_download( $reply, $package, $upgrader = null, $hook_extra = array() ) {
-		if ( empty( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== $this->basename ) {
+		// Only act on THIS product's own update (plugin key or theme key).
+		$mine = ( 'theme' === $this->type )
+			? ( ! empty( $hook_extra['theme'] ) && $hook_extra['theme'] === $this->stylesheet )
+			: ( ! empty( $hook_extra['plugin'] ) && $hook_extra['plugin'] === $this->basename );
+		if ( ! $mine ) {
 			return $reply;
 		}
 
