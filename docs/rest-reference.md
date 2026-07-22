@@ -131,9 +131,10 @@ Re-check a key's current status. Never blocks: an unknown key returns `valid:fal
 
 ## GET `/update`
 
-The WordPress update-channel check. Always tolerant — any missing entitlement, unknown
-key/product, or "already current" returns a plain **no-update** answer (HTTP 200). Only
-a genuine newer version for a **valid** licence returns a package.
+The update check — for WordPress plugins **and** non-WordPress products (Windows
+`.exe`/`.msi`, other). Always tolerant — any missing entitlement, unknown key/product,
+or "already current" returns a plain **no-update** answer (HTTP 200). Only a genuine
+newer version for a **valid** licence returns a package.
 
 **Query parameters**
 
@@ -143,7 +144,7 @@ a genuine newer version for a **valid** licence returns a package.
 | `product` | yes | Product slug. |
 | `version` | yes | Installed version reported by the client. |
 | `instance` | no | Activation identifier. |
-| `instance_type` | no | `domain` (default) or `device`. |
+| `instance_type` | no | `domain` (default) or `device`. Desktop/Windows apps use `device`. |
 
 **No update `200`**
 
@@ -151,7 +152,9 @@ a genuine newer version for a **valid** licence returns a package.
 { "success": true, "update": false }
 ```
 
-**Update available `200`**
+**Update available `200`** — the product's **platform** shapes the payload.
+
+WordPress plugin (carries the WordPress-only `requires` / `requires_php` / `tested`):
 
 ```json
 {
@@ -160,6 +163,7 @@ a genuine newer version for a **valid** licence returns a package.
   "slug": "acme-gallery-pro",
   "new_version": "1.1.0",
   "package": "https://smartengin.de/wp-json/sels/v1/download?token=…",
+  "platform": "wordpress",
   "requires": "6.4",
   "requires_php": "7.4",
   "tested": "6.4",
@@ -169,16 +173,37 @@ a genuine newer version for a **valid** licence returns a package.
 }
 ```
 
+Windows app (omits the WordPress fields; adds `filename`, the real name to save the
+download as):
+
+```json
+{
+  "success": true,
+  "update": true,
+  "slug": "acme-desktop",
+  "new_version": "1.1.0",
+  "package": "https://smartengin.de/wp-json/sels/v1/download?token=…",
+  "platform": "windows",
+  "filename": "acme-desktop-1.1.0-ab12cd.exe",
+  "changelog_url": "https://…",
+  "homepage_url": "https://…",
+  "sha256": "e3b0c44298fc1c149afbf4c8996fb924…"
+}
+```
+
 `package` is a **signed, short-lived** `/download` URL. `sha256` is present when the
-server can compute the package checksum — the client verifies it before installing.
+server can compute the package checksum — the client **must** verify it before
+installing. Building a Windows/desktop client? See
+[Selling & updating Windows software](windows-software-guide.md).
 
 ---
 
 ## GET `/download`
 
-Streams the update package for a valid **signed token**. The token is produced by
-`/update`; you do not build it yourself. Opened by WordPress during install (or a
-browser). On success it streams the file and exits; on failure it returns JSON.
+Streams the update package for a valid **signed token** — a WordPress `.zip`, a
+Windows `.exe`/`.msi`, or any file product. The token is produced by `/update`; you do
+not build it yourself. On success it streams the file and exits; on failure it returns
+JSON. The `Content-Disposition` header carries the real file name.
 
 **Query parameters**
 

@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>SmartEngin.Licence</AssemblyName>
+    <RootNamespace>SmartEngin.Licence</RootNamespace>
+    <Version>0.1.0</Version>
+    <Description>Client library for smartEngin Licence &amp; buy: activation, fail-open validation and silent self-update for Windows .NET apps.</Description>
+  </PropertyGroup>
+
+</Project>

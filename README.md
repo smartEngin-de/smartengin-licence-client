@@ -30,6 +30,11 @@ one object, done — no npm, no build step.
 
 That's it. Updates then flow through the normal WordPress update screens automatically.
 
+> **Not WordPress?** The same server licenses and **silently auto-updates Windows desktop
+> apps** too — reference clients for **.NET/C#** and **Python** are included. See
+> [`docs/windows-software-guide.md`](docs/windows-software-guide.md) and
+> [`docs/python-software-guide.md`](docs/python-software-guide.md).
+
 ## What's in here
 
 | Path | Contents |
@@ -38,8 +43,11 @@ That's it. Updates then flow through the normal WordPress update screens automat
 | `docs/integration-guide.md` | Full step-by-step integration guide (K2). |
 | `docs/rest-reference.md` | REST endpoints, human-readable (K3). |
 | `docs/openapi.yaml` | Machine-readable API spec (K3) for codegen / other languages. |
+| `docs/windows-software-guide.md` | Selling & silently auto-updating **Windows / non-WordPress** software (with the .NET reference client). |
+| `docs/python-software-guide.md` | The same, for **Python** desktop apps (dependency-free `se_licence.py` reference client). |
 | `docs/what-licensing-does.md` | Honest scope + a **"give this to your AI"** prompt (K5). |
 | `example/smartengin-licence-example/` | A minimal, working reference plugin (K4). |
+| `clients/dotnet/`, `clients/python/` | Reference clients for **non-WordPress** software (.NET/C# and Python). See [`clients/README.md`](clients/README.md). |
 | `llms.txt` | Wayfinder for AI tools. |
 
 ## Honest note

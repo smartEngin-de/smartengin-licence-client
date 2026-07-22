@@ -144,13 +144,19 @@ paths:
   /update:
     get:
       tags: [licensing]
-      summary: WordPress update-channel check. Tolerant — returns no-update on any doubt.
+      summary: Update check. WordPress plugins (.zip) and non-WordPress products (Windows .exe/.msi, other) alike. Tolerant — returns no-update on any doubt.
+      description: >
+        Returns the latest version and a signed download URL for a valid licence.
+        The product's **platform** shapes the payload: WordPress products carry the
+        WordPress-only fields (`requires`, `requires_php`, `tested`); non-WordPress
+        products omit those and instead carry `filename` (the real package file name
+        to save the download as). Desktop apps send `instance_type=device`.
       parameters:
         - { name: key, in: query, required: true, schema: { type: string } }
         - { name: product, in: query, required: true, schema: { type: string } }
         - { name: version, in: query, required: true, schema: { type: string }, description: "Installed version." }
         - { name: instance, in: query, required: false, schema: { type: string } }
-        - { name: instance_type, in: query, required: false, schema: { type: string, enum: [domain, device], default: domain } }
+        - { name: instance_type, in: query, required: false, schema: { type: string, enum: [domain, device], default: domain }, description: "Use device for desktop/Windows apps." }
       responses:
         "200":
           description: >
@@ -168,16 +174,30 @@ paths:
                   summary: No update available
                   value: { success: true, update: false }
                 update_available:
-                  summary: Update available
+                  summary: Update available (WordPress plugin)
                   value:
                     success: true
                     update: true
                     slug: acme-gallery-pro
                     new_version: "1.1.0"
                     package: "https://smartengin.de/wp-json/sels/v1/download?token=eyJ…"
+                    platform: wordpress
                     requires: "6.4"
                     requires_php: "7.4"
                     tested: "6.4"
+                    changelog_url: "https://example.com/changelog"
+                    homepage_url: "https://example.com"
+                    sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+                update_available_windows:
+                  summary: Update available (Windows app)
+                  value:
+                    success: true
+                    update: true
+                    slug: acme-desktop
+                    new_version: "1.1.0"
+                    package: "https://smartengin.de/wp-json/sels/v1/download?token=eyJ…"
+                    platform: windows
+                    filename: "acme-desktop-1.1.0-ab12cd.exe"
                     changelog_url: "https://example.com/changelog"
                     homepage_url: "https://example.com"
                     sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -190,14 +210,16 @@ paths:
       description: >
         The `token` is produced by `/update`; you do not build it yourself. It is a
         signed (HMAC), URL-safe, short-lived token — treat it as opaque. On success the
-        endpoint streams the ZIP and exits; on failure it returns a JSON error.
+        endpoint streams the package (WordPress .zip, Windows .exe/.msi, or any file
+        product) and exits; on failure it returns a JSON error. The response's
+        `Content-Disposition` header carries the real file name.
       parameters:
         - { name: token, in: query, required: true, schema: { type: string }, description: "Signed, short-lived token issued by /update. Opaque; expires quickly." }
       responses:
         "200":
-          description: The package file stream (application/zip).
+          description: "The package file stream. Content type varies by file: application/zip, application/octet-stream for .exe/.msi, etc."
           content:
-            application/zip:
+            application/octet-stream:
               schema: { type: string, format: binary }
         "400":
           description: "`bad_token` — missing or malformed token."
@@ -260,9 +282,11 @@ components:
         slug: { type: string }
         new_version: { type: string }
         package: { type: string, format: uri, description: "Signed, short-lived /download URL." }
-        requires: { type: string }
-        requires_php: { type: string }
-        tested: { type: string }
+        platform: { type: string, enum: [wordpress, windows, other], description: "Product platform; selects which fields below are present." }
+        filename: { type: string, description: "Non-WordPress only: the real package file name (extension) to save the download as." }
+        requires: { type: string, description: "WordPress only: minimum WordPress version." }
+        requires_php: { type: string, description: "WordPress only: minimum PHP version." }
+        tested: { type: string, description: "WordPress only: tested-up-to WordPress version." }
         changelog_url: { type: string, format: uri }
         homepage_url: { type: string, format: uri }
-        sha256: { type: string, description: "Package checksum; present when computable." }
+        sha256: { type: string, description: "Package checksum; present when computable. Verify it before installing." }

@@ -1,0 +1,33 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <AssemblyName>SampleApp</AssemblyName>
+    <RootNamespace>SampleApp</RootNamespace>
+
+    <!-- Single-file, self-contained publish so the swap-update flow can be tested. -->
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+
+    <!-- Bump this per release; it is what the client reports to /update. -->
+    <Version>1.0.0</Version>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\SmartEngin.Licence\SmartEngin.Licence.csproj" />
+  </ItemGroup>
+
+  <!-- Customer-ready builds bake the licence server + product slug into the app:
+       dotnet publish -p:SeServer=https://smartengin.de -p:SeSlug=your-slug
+       With neither set, the app stays in "ask once" test mode. -->
+  <ItemGroup>
+    <AssemblyMetadata Include="SeServer" Value="$(SeServer)" Condition="'$(SeServer)' != ''" />
+    <AssemblyMetadata Include="SeSlug" Value="$(SeSlug)" Condition="'$(SeSlug)' != ''" />
+  </ItemGroup>
+
+</Project>

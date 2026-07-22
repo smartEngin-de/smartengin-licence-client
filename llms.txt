@@ -11,7 +11,14 @@
 - [Integration guide](docs/integration-guide.md): step-by-step — register product, bundle library, one Self_Client instance, licence panel, gate features, updates.
 - [REST reference](docs/rest-reference.md): endpoints /activate, /deactivate, /validate, /update, /download with parameters and responses.
 - [OpenAPI spec](docs/openapi.yaml): machine-readable API for codegen and non-WordPress clients.
+- [Windows software guide](docs/windows-software-guide.md): sell and silently auto-update Windows / non-WordPress apps (backend product with Platform=Windows, .NET reference client, single-file self-replace + restart, SHA-256 verify, code signing).
+- [Python software guide](docs/python-software-guide.md): the same for Python desktop apps — dependency-free se_licence.py reference client, PyInstaller --onefile self-replace via --se-apply-update helper, SHA-256 verify, fail-open.
 - [What licensing does](docs/what-licensing-does.md): honest scope (GPL reality, server-side enforcement, fail-open) plus a ready "give this to your AI" prompt.
+
+## Reference clients (non-WordPress)
+
+- [.NET/C# client](clients/dotnet/): SmartEngin.Licence library + sample app — activation, fail-open validation, single-file self-replace + restart. Guide: docs/windows-software-guide.md.
+- [Python client](clients/python/): dependency-free se_licence.py — same recipe, PyInstaller --onefile self-update via --se-apply-update helper. Guide: docs/python-software-guide.md.
 
 ## Example
 

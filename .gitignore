@@ -1,0 +1,25 @@
+# --- .NET build artefacts ---
+bin/
+obj/
+*.user
+
+# --- Python ---
+venv/
+.venv/
+__pycache__/
+*.pyc
+dist/
+build/
+*.spec
+
+# A real, filled-in licence_config.py is app-specific — commit only the .example.
+clients/python/licence_config.py
+
+# App-local secrets/config
+config.json
+
+# --- OS / editor ---
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
