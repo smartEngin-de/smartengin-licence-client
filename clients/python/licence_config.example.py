@@ -10,6 +10,6 @@ types their licence key (server address and slug are never shown).
                  app reports to /update.
 """
 
-SERVER_URL = "https://smartengin.de"
+SERVER_URL = "https://your-licence-server.example"
 PRODUCT_SLUG = "your-product-slug"
 APP_VERSION = "1.0.0"

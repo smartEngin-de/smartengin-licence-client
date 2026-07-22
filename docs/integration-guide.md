@@ -107,7 +107,7 @@ define( 'ACME_GALLERY_PRO_VERSION', '1.0.0' );
  * dedicated domain, change this single line — nothing else.
  */
 if ( ! defined( 'ACME_LICENCE_SERVER' ) ) {
-	define( 'ACME_LICENCE_SERVER', 'https://smartengin.de' );
+	define( 'ACME_LICENCE_SERVER', 'https://your-licence-server.example' );
 }
 
 require_once __DIR__ . '/lib/smartengin-licence-client/self-client.php';

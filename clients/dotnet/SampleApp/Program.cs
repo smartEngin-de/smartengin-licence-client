@@ -58,9 +58,9 @@ else
     }
     if (string.IsNullOrWhiteSpace(server))
     {
-        Console.Write("Server URL [https://smartengin.de]: ");
+        Console.Write("Server URL [https://your-licence-server.example]: ");
         server = (Console.ReadLine() ?? "").Trim();
-        if (server.Length == 0) server = "https://smartengin.de";
+        if (server.Length == 0) server = "https://your-licence-server.example";
     }
     if (string.IsNullOrWhiteSpace(slug))
     {

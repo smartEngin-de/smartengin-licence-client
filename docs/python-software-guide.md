@@ -56,7 +56,7 @@ the three product constants so the end user only ever types a key:
 
 ```python
 # licence_config.py
-SERVER_URL   = "https://smartengin.de"   # your Licence & buy site (keep in ONE place)
+SERVER_URL   = "https://your-licence-server.example"   # your Licence & buy site (keep in ONE place)
 PRODUCT_SLUG = "your-product-slug"        # exactly as in the backend
 APP_VERSION  = "1.0.0"                     # bump on every release
 ```

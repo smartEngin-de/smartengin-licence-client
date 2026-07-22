@@ -31,7 +31,7 @@ define( 'SLE_VERSION', '1.0.0' );
  * dedicated domain, change this single line — the whole plugin follows.
  */
 if ( ! defined( 'SLE_LICENCE_SERVER' ) ) {
-	define( 'SLE_LICENCE_SERVER', 'https://smartengin.de' );
+	define( 'SLE_LICENCE_SERVER', 'https://your-licence-server.example' );
 }
 
 /**

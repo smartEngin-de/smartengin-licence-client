@@ -62,7 +62,7 @@ if (Updater.TryRunUpdaterMode(args)) return;
 
 // (2) Configure once. Keep ServerBaseUrl in a single place.
 var options = new LicenceOptions {
-    ServerBaseUrl = "https://smartengin.de",
+    ServerBaseUrl = "https://your-licence-server.example",
     ProductSlug   = "your-product-slug",
     AppVersion    = "1.0.0",               // your installed version
 };

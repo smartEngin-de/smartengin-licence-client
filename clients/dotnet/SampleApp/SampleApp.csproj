@@ -23,7 +23,7 @@
   </ItemGroup>
 
   <!-- Customer-ready builds bake the licence server + product slug into the app:
-       dotnet publish -p:SeServer=https://smartengin.de -p:SeSlug=your-slug
+       dotnet publish -p:SeServer=https://your-licence-server.example -p:SeSlug=your-slug
        With neither set, the app stays in "ask once" test mode. -->
   <ItemGroup>
     <AssemblyMetadata Include="SeServer" Value="$(SeServer)" Condition="'$(SeServer)' != ''" />

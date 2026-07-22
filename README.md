@@ -17,7 +17,7 @@ one object, done — no npm, no build step.
    require_once __DIR__ . '/lib/smartengin-licence-client/self-client.php';
 
    $GLOBALS['my_licence'] = new Self_Client( array(
-       'server_url'  => 'https://smartengin.de', // keep in ONE constant
+       'server_url'  => 'https://your-licence-server.example', // keep in ONE constant
        'slug'        => 'my-plugin-slug',          // = product slug on the server
        'plugin_file' => __FILE__,
        'version'     => '1.0.0',

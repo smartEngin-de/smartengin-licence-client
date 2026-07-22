@@ -19,7 +19,7 @@ Licence & buy. It is meant to be read and forked, not shipped as-is.
 
 1. On your licence server, create a product with the slug "smartengin-licence-example"
    (or change SLE_SLUG in the plugin file to match your product).
-2. Set SLE_LICENCE_SERVER to your licence server URL (default: https://smartengin.de).
+2. Set SLE_LICENCE_SERVER to your licence server URL (default: https://your-licence-server.example).
 3. Install and activate this plugin, then open Settings -> Licence Example.
 4. Paste a valid licence key and click Activate. The status turns green and the
    "Premium feature ACTIVE" notice appears.
