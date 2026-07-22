@@ -1,12 +1,17 @@
-# Selling & auto-updating Python (Windows) software
+# Selling & auto-updating Python desktop software (Windows, macOS, Linux)
 
 smartEngin Licence & buy licenses and **silently auto-updates Python desktop apps** the
 same way it does WordPress plugins and .NET apps. This guide shows how, using a small
 dependency-free Python client that mirrors the .NET reference client one-to-one.
 
+The client (`se_licence.py`) is **cross-platform** — the same code runs on **Windows,
+macOS and Linux**. Data folders, process-waiting and the executable bit are chosen per
+OS automatically; only the packaging of your app differs (see
+[Other platforms](#other-platforms-macos--linux)).
+
 - The **server side is identical** to WordPress and .NET: register a product, upload the
-  new build, set the version. The only product-specific setting is **Platform = Windows
-  app (.exe / .msi)**.
+  new build, set the version. For a desktop app set **Platform = Windows app (.exe /
+  .msi)** (used for any single-file desktop binary) or **Other** for a different package.
 - A ready **Python reference client** (`se_licence.py`, standard library only) does
   activation, fail-open validation and the silent self-update for you.
 - It is the exact Python equivalent of the [.NET client](windows-software-guide.md); both
@@ -134,6 +139,31 @@ being swapped.
 > **Packaging note:** this in-place swap suits a single-file `.exe`. A PyInstaller
 > *folder* build (`--onedir`) is a whole directory, which cannot be swapped as one file —
 > use `--onefile` for self-update, or ship an installer and upload that as the package.
+
+### Other platforms (macOS / Linux)
+
+`se_licence.py` runs unchanged on macOS and Linux. It stores its state in the
+platform-standard place (`~/Library/Application Support/…` on macOS, `$XDG_DATA_HOME`
+or `~/.local/share/…` on Linux), waits for the old process by PID, and restores the
+executable bit after the swap. Build with PyInstaller the same way (no `--windowed`
+needed for a plain binary):
+
+```bash
+pyinstaller --onefile --name "YourApp" app.py
+```
+
+- **Linux:** a `--onefile` binary (or a single-file AppImage) self-updates exactly like
+  the Windows `.exe`. Set **Platform = Other** on the product and upload the binary. If you
+  ship a `.deb`/`.rpm` instead, that is a system package — let the OS package manager
+  update it.
+- **macOS:** a single-file executable self-updates the same way. A real `.app` **bundle**
+  is a folder, not one file, so the in-place swap does not fit — distribute a signed,
+  **notarized** `.dmg`/`.pkg` and upload that as the package (the client still verifies the
+  SHA-256), or ship a single-file build. macOS Gatekeeper requires notarization for
+  downloaded apps, just as Windows wants Authenticode (section 5).
+
+The **licensing** part (activate / validate, fail-open) is identical on every platform;
+only the update *packaging* differs.
 
 ---
 

@@ -5,6 +5,12 @@ Python-Spiegel der .NET-Referenzbibliothek `SmartEngin.Licence`. Bewusst ohne
 Fremd-Abhaengigkeiten (nur Standardbibliothek), damit das PyInstaller-Bundle
 schlank bleibt. Redet ueber die oeffentliche REST-API `sels/v1` mit dem Server.
 
+Plattformuebergreifend (Windows / macOS / Linux): Datenordner, Prozess-Warten und
+das Ausfuehrbar-Bit werden je Betriebssystem passend gewaehlt. Der Selbst-Update-
+Tausch ersetzt EINE ausfuehrbare Datei (PyInstaller --onefile); ein macOS-.app-
+Bundle oder ein Ordner-Build muss stattdessen ueber einen Installer aktualisiert
+werden (siehe python-software-guide.md).
+
 Drei Bausteine, identisch zur .NET-Vorlage:
   * Geraete-ID   – stabile, anonyme Kennung dieser Installation (instance_type=device).
   * LicenceClient – activate / validate / deactivate, Validierung faellt „fail-open"
@@ -36,12 +42,16 @@ _INSTANCE_FILE = "instance.id"
 _KEY_FILE = "key.txt"
 
 
-def _local_appdata() -> str:
-    """Windows LocalApplicationData, mit Fallback fuer Nicht-Windows/Tests."""
-    base = os.environ.get("LOCALAPPDATA")
-    if not base:
-        base = os.path.join(os.path.expanduser("~"), "AppData", "Local")
-    return base
+def _data_root() -> str:
+    """Plattform-ueblicher Ort fuer App-Daten (Windows / macOS / Linux)."""
+    if os.name == "nt":
+        return os.environ.get("LOCALAPPDATA") or os.path.join(
+            os.path.expanduser("~"), "AppData", "Local")
+    if sys.platform == "darwin":
+        return os.path.join(os.path.expanduser("~"), "Library", "Application Support")
+    # Linux / sonstige POSIX: XDG-Basisverzeichnis.
+    return os.environ.get("XDG_DATA_HOME") or os.path.join(
+        os.path.expanduser("~"), ".local", "share")
 
 
 def _sanitize(name: str) -> str:
@@ -51,7 +61,7 @@ def _sanitize(name: str) -> str:
 
 def data_dir(slug: str) -> str:
     """Ordner fuer den Client-Zustand dieses Produkts (Geraete-ID, Cache, Schluessel)."""
-    return os.path.join(_local_appdata(), "SmartEnginLicence", _sanitize(slug))
+    return os.path.join(_data_root(), "SmartEnginLicence", _sanitize(slug))
 
 
 def machine_id(slug: str) -> str:
@@ -399,8 +409,10 @@ class Updater:
 
         # Neue exe an einen Helfer-Pfad kopieren, der NICHT die zu ersetzende Datei
         # ist, damit er waehrend des Ueberschreibens laufen kann.
-        helper = os.path.join(os.path.dirname(verified_package_path), "se-apply.exe")
+        helper = os.path.join(os.path.dirname(verified_package_path),
+                              "se-apply.exe" if os.name == "nt" else "se-apply")
         _copy_file(verified_package_path, helper)
+        _make_executable(helper)
 
         args = [
             helper, _APPLY_FLAG,
@@ -448,8 +460,20 @@ def _copy_file(src: str, dst: str) -> None:
             fo.write(chunk)
 
 
+def _make_executable(path: str) -> None:
+    """Auf POSIX (macOS/Linux) das Ausfuehrbar-Bit setzen; unter Windows unnoetig."""
+    if os.name == "nt":
+        return
+    try:
+        import stat
+        mode = os.stat(path).st_mode
+        os.chmod(path, mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+    except OSError:
+        pass
+
+
 def _wait_for_pid_exit(pid: int, timeout_s: float) -> None:
-    """Auf das Ende des alten Prozesses warten, damit dessen .exe entsperrt."""
+    """Auf das Ende des alten Prozesses warten, damit dessen Datei entsperrt."""
     if pid <= 0:
         return
     if os.name == "nt":
@@ -463,9 +487,16 @@ def _wait_for_pid_exit(pid: int, timeout_s: float) -> None:
                 return
         except Exception:  # noqa: BLE001
             pass
-    # Fallback: kurz pollen.
+        # Windows-Fallback: rein zeitbasiert warten.
+        time.sleep(min(timeout_s, 5))
+        return
+    # POSIX (macOS/Linux): pollen, bis der Prozess wirklich weg ist.
     deadline = time.time() + timeout_s
     while time.time() < deadline:
+        try:
+            os.kill(pid, 0)
+        except OSError:
+            return  # Prozess ist beendet -> Datei ist frei
         time.sleep(0.25)
 
 
@@ -481,6 +512,7 @@ def apply_swap(target: str, source: str, pid: int, relaunch: bool) -> None:
     for _ in range(20):
         try:
             _copy_file(source, target)
+            _make_executable(target)  # POSIX: ersetzte Binaerdatei bleibt ausfuehrbar
             break
         except OSError:
             time.sleep(0.25)

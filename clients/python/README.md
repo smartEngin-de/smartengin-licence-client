@@ -4,7 +4,8 @@ A small, **dependency-free** Python client (standard library only) to license an
 silently auto-update a Python desktop app through a
 [smartEngin Licence & buy](https://smartengin.de) server. It mirrors the
 [.NET reference client](../dotnet/) one-to-one and talks to the same public REST API
-(`sels/v1`).
+(`sels/v1`). The same code runs on **Windows, macOS and Linux** — see the
+[guide's platform notes](../../docs/python-software-guide.md#other-platforms-macos--linux).
 
 Full walkthrough: [`../../docs/python-software-guide.md`](../../docs/python-software-guide.md).
 
