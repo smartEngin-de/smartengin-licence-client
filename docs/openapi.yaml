@@ -151,28 +151,44 @@ paths:
         WordPress-only fields (`requires`, `requires_php`, `tested`); non-WordPress
         products omit those and instead carry `filename` (the real package file name
         to save the download as). Desktop apps send `instance_type=device`.
+
+
+        Since server 1.1.0 the activation limit is enforced here too: an unknown
+        installation is registered silently while the licence still has a free
+        slot (so an honest move never loses updates), and refused once the
+        licence is full. Always send `instance` — a limited licence gets the
+        plain no-update answer without it.
       parameters:
         - { name: key, in: query, required: true, schema: { type: string } }
         - { name: product, in: query, required: true, schema: { type: string } }
         - { name: version, in: query, required: true, schema: { type: string }, description: "Installed version." }
-        - { name: instance, in: query, required: false, schema: { type: string } }
+        - { name: instance, in: query, required: false, schema: { type: string }, description: "Activation identifier. Required in practice for a limited licence." }
         - { name: instance_type, in: query, required: false, schema: { type: string, enum: [domain, device], default: domain }, description: "Use device for desktop/Windows apps." }
       responses:
         "200":
           description: >
             Either "no update" or an available update with a signed package URL. Any
             missing entitlement, unknown key/product, or "already current" yields the
-            no-update form (still HTTP 200), so the client never breaks.
+            no-update form (still HTTP 200), so the client never breaks. A refusal for
+            this particular installation adds `blocked` to that same form.
           content:
             application/json:
               schema:
                 oneOf:
                   - $ref: "#/components/schemas/NoUpdate"
+                  - $ref: "#/components/schemas/UpdateBlocked"
                   - $ref: "#/components/schemas/UpdateAvailable"
               examples:
                 no_update:
                   summary: No update available
                   value: { success: true, update: false }
+                blocked:
+                  summary: Refused — this installation is not covered by the licence
+                  value:
+                    success: true
+                    update: false
+                    blocked: limit_reached
+                    message: "This website is not registered for this licence, and the licence has no free activation left …"
                 update_available:
                   summary: Update available (WordPress plugin)
                   value:
@@ -274,6 +290,17 @@ components:
       properties:
         success: { type: boolean, example: true }
         update: { type: boolean, example: false }
+    UpdateBlocked:
+      type: object
+      description: >
+        No update, and the reason is this installation rather than the licence.
+        Deliberately shaped like NoUpdate (HTTP 200, update:false) so a client
+        that does not know these fields behaves exactly as before.
+      properties:
+        success: { type: boolean, example: true }
+        update: { type: boolean, example: false }
+        blocked: { type: string, enum: [limit_reached, trial_used_on_site], description: "Machine-readable reason. Key your logic off this, never off message." }
+        message: { type: string, description: "Plain wording in the licence server's language, meant to be shown to the customer as-is." }
     UpdateAvailable:
       type: object
       properties:

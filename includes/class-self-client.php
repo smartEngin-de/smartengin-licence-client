@@ -92,6 +92,9 @@ class Self_Client {
 		add_action( 'wp_ajax_' . $this->slug . '_activate', array( $this, 'ajax_activate' ) );
 		add_action( 'wp_ajax_' . $this->slug . '_deactivate', array( $this, 'ajax_deactivate' ) );
 
+		// Tell the customer when the server refuses updates for this website.
+		add_action( 'admin_notices', array( $this, 'blocked_notice' ) );
+
 		// Daily re-validation via WP-Cron.
 		add_action( $this->cron_hook, array( $this, 'cron_validate' ) );
 		if ( ! wp_next_scheduled( $this->cron_hook ) ) {
@@ -134,6 +137,8 @@ class Self_Client {
 			'valid_until'      => null,
 			'activations_left' => null,
 			'last_check'       => 0,
+			'blocked'          => '',    // Server refused THIS site: limit_reached|trial_used_on_site|''
+			'blocked_message'  => '',    // Reason in plain words, as sent by the server.
 		);
 		return wp_parse_args( (array) get_option( $this->option_name, array() ), $defaults );
 	}
@@ -256,6 +261,12 @@ class Self_Client {
 		$state = $this->get_state();
 		$state['key'] = $key;
 
+		// The server has just re-judged this website, so any earlier block is
+		// stale either way – it is re-established on the next update check if
+		// it still applies.
+		$state['blocked']         = '';
+		$state['blocked_message'] = '';
+
 		if ( 200 === $res['code'] && ! empty( $data['success'] ) ) {
 			$state['activated']        = true;
 			$state['status']           = isset( $data['status'] ) ? (string) $data['status'] : 'active';
@@ -299,6 +310,8 @@ class Self_Client {
 		$state['status']           = '';
 		$state['valid_until']      = null;
 		$state['activations_left'] = null;
+		$state['blocked']          = '';
+		$state['blocked_message']  = '';
 		$this->set_state( $state );
 		$this->flush_update_cache();
 		return true;
@@ -361,15 +374,57 @@ class Self_Client {
 		}
 
 		$res = $this->call( 'update', array( 'key' => $key, 'version' => $this->version ), 'GET' );
-		if ( is_wp_error( $res ) || 200 !== $res['code'] || empty( $res['data']['update'] ) ) {
+		if ( is_wp_error( $res ) || 200 !== $res['code'] ) {
 			// No-bricking: on any error just report "no update" (the plugin keeps
 			// running); the next check picks it up once the server is reachable.
+			// A stored block is deliberately left untouched here – an unreachable
+			// server must never invent one and never clear one.
 			$this->update_memo = array( 'update' => false );
 			return $this->update_memo;
 		}
 
-		$this->update_memo = $res['data'];
+		$data = is_array( $res['data'] ) ? $res['data'] : array();
+
+		// The server answered properly, so its verdict on THIS installation is
+		// current – remember it, or clear it once the site is registered again.
+		$this->remember_block( $data );
+
+		if ( empty( $data['update'] ) ) {
+			$data['update'] = false;
+		}
+
+		$this->update_memo = $data;
 		return $this->update_memo;
+	}
+
+	/**
+	 * Remember – or clear – a server-side block for this installation.
+	 *
+	 * The server answers "no update" both when there simply is none and when it
+	 * refuses THIS website (licence full, trial already used here). Only the
+	 * second case carries a 'blocked' code. Without storing it the customer
+	 * would see nothing at all and never learn why updates stopped, which is
+	 * exactly the silent failure the server-side check was built to avoid.
+	 *
+	 * Called only after a proper HTTP 200, so an unreachable server can neither
+	 * invent nor clear a block. Writes only on a real change: the update check
+	 * runs often and a needless option write each time would be pure load.
+	 *
+	 * @param array $data Decoded server answer.
+	 * @return void
+	 */
+	private function remember_block( array $data ) {
+		$code    = isset( $data['blocked'] ) ? (string) $data['blocked'] : '';
+		$message = ( '' !== $code && isset( $data['message'] ) ) ? (string) $data['message'] : '';
+
+		$state = $this->get_state();
+		if ( (string) $state['blocked'] === $code && (string) $state['blocked_message'] === $message ) {
+			return;
+		}
+
+		$state['blocked']         = $code;
+		$state['blocked_message'] = $message;
+		$this->set_state( $state );
 	}
 
 	/**
@@ -722,6 +777,78 @@ class Self_Client {
 	}
 
 	/**
+	 * Plain-words reason for a server-side block.
+	 *
+	 * Prefers the server's own wording: it knows exactly which rule was hit and
+	 * speaks the vendor's language. Falls back to a generic line when only the
+	 * code arrived (e.g. an older server).
+	 *
+	 * @param array $state Licence state.
+	 * @return string
+	 */
+	private function blocked_text( array $state ) {
+		$message = isset( $state['blocked_message'] ) ? (string) $state['blocked_message'] : '';
+		if ( '' !== $message ) {
+			return $message;
+		}
+		if ( 'trial_used_on_site' === (string) $state['blocked'] ) {
+			return __( 'This website has already used its free trial, so it receives no updates.', 'smartengin-licence-client' );
+		}
+		return __( 'This website is not registered for this licence, so it receives no updates.', 'smartengin-licence-client' );
+	}
+
+	/**
+	 * Display name of the host product, for messages the customer reads.
+	 *
+	 * @return string
+	 */
+	private function product_name() {
+		if ( 'theme' === $this->type ) {
+			$theme = function_exists( 'wp_get_theme' ) ? wp_get_theme( $this->stylesheet ) : null;
+			return ( $theme && $theme->exists() ) ? (string) $theme->get( 'Name' ) : $this->slug;
+		}
+		if ( $this->plugin_file && function_exists( 'get_plugin_data' ) && is_file( $this->plugin_file ) ) {
+			$data = get_plugin_data( $this->plugin_file, false, false );
+			if ( ! empty( $data['Name'] ) ) {
+				return (string) $data['Name'];
+			}
+		}
+		return $this->slug;
+	}
+
+	/**
+	 * Warn on the plugins / updates / themes screens when the licence server
+	 * refuses updates for THIS website.
+	 *
+	 * Without this the customer only ever sees "no update available" and never
+	 * learns the reason – the silent failure the server-side activation check
+	 * would otherwise introduce. It never disables anything: the product keeps
+	 * running, only the update channel is paused.
+	 *
+	 * @return void
+	 */
+	public function blocked_notice() {
+		$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+		if ( ! $screen || ! in_array( $screen->id, array( 'plugins', 'update-core', 'themes' ), true ) ) {
+			return;
+		}
+		if ( ! current_user_can( 'theme' === $this->type ? 'update_themes' : 'update_plugins' ) ) {
+			return;
+		}
+
+		$state = $this->get_state();
+		if ( '' === (string) $state['blocked'] ) {
+			return;
+		}
+
+		printf(
+			'<div class="notice notice-warning"><p><strong>%1$s</strong> %2$s</p></div>',
+			esc_html( $this->product_name() . ':' ),
+			esc_html( $this->blocked_text( $state ) )
+		);
+	}
+
+	/**
 	 * Human-readable status line HTML.
 	 *
 	 * @return string
@@ -731,6 +858,12 @@ class Self_Client {
 
 		if ( empty( $state['activated'] ) ) {
 			return '<span class="self-status self-status--inactive">' . esc_html__( 'Not activated.', 'smartengin-licence-client' ) . '</span>';
+		}
+
+		// A block outranks the licence status: the key itself can be perfectly
+		// fine while THIS website still receives no updates.
+		if ( '' !== (string) $state['blocked'] ) {
+			return '<span class="self-status self-status--expired">' . esc_html( $this->blocked_text( $state ) ) . '</span>';
 		}
 
 		switch ( (string) $state['status'] ) {

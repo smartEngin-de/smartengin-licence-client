@@ -38,9 +38,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-// Bump when the library changes; the highest version loaded across all plugins wins.
+// Bump when the library changes.
+//
+// Careful: when several products bundle this library on the same site, the copy
+// that is loaded FIRST wins – there is no version comparison (class_exists()
+// below simply skips every later copy, whatever its version). So all products
+// must ship the SAME library version; an old copy in any one plugin silently
+// downgrades the library for all of them.
 if ( ! defined( 'SELF_CLIENT_VERSION' ) ) {
-	define( 'SELF_CLIENT_VERSION', '0.6.0' );
+	define( 'SELF_CLIENT_VERSION', '0.7.0' );
 }
 
 if ( ! class_exists( 'Self_Client' ) ) {

@@ -143,14 +143,53 @@ newer version for a **valid** licence returns a package.
 | `key` | yes | Licence key. |
 | `product` | yes | Product slug. |
 | `version` | yes | Installed version reported by the client. |
-| `instance` | no | Activation identifier. |
+| `instance` | **yes** | Activation identifier. Required in practice for a limited licence — see *Activation limit* below. |
 | `instance_type` | no | `domain` (default) or `device`. Desktop/Windows apps use `device`. |
+
+### Activation limit (since server 1.1.0)
+
+The update channel enforces the same "how many installations" promise as
+`/activate`. Before answering, the server checks whether the **asking**
+installation belongs to the licence:
+
+- **Unlimited licence** (`activation_limit = 0`) — always passes.
+- **Known installation** — passes, and its last-seen timestamp is refreshed.
+- **Unknown installation, licence has a free slot** — silently registered, then
+  passes. This is deliberate: a customer who changes domain or promotes a
+  staging copy to live must never lose updates without noticing.
+- **Unknown installation, licence is full** — refused, with a reason (below).
+- **No `instance` supplied** — plain no-update. Always send one.
+
+Without this check the limit would live only in the client, as a flag in that
+site's own options — which a cloned site (migration plugin, staging copy,
+restored backup) carries along together with the real key.
 
 **No update `200`**
 
 ```json
 { "success": true, "update": false }
 ```
+
+**Refused `200`** — the licence is fine, but not for *this* installation. Still
+HTTP 200 with `update: false`, so a client that does not know the field behaves
+exactly as before; a current client reads `blocked` and tells the customer why.
+
+```json
+{
+  "success": true,
+  "update": false,
+  "blocked": "limit_reached",
+  "message": "This website is not registered for this licence, and the licence has no free activation left …"
+}
+```
+
+| `blocked` | Meaning |
+|---|---|
+| `limit_reached` | This installation is not registered and no activation slot is free. |
+| `trial_used_on_site` | A free trial already ran on this installation, under a different key. |
+
+`message` is plain wording in the **licence server's** language, meant to be
+shown to the customer as-is. Never key logic off `message`; use `blocked`.
 
 **Update available `200`** — the product's **platform** shapes the payload.
 

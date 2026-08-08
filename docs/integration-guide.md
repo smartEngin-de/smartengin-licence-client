@@ -233,6 +233,14 @@ add_action( 'init', function () {
 | `valid_until` | string\|null | MySQL datetime, or `null` for a lifetime licence. |
 | `activations_left` | int\|null | Remaining activation slots, or `null` when unlimited. |
 | `last_check` | int | Unix time of the last successful server check. |
+| `blocked` | string | `''` normally. Set when the server refuses updates for **this** installation: `limit_reached` or `trial_used_on_site`. |
+| `blocked_message` | string | The server's plain-words reason, ready to show. Empty when `blocked` is empty. |
+
+`blocked` is about the *installation*, not the key: `status` can be `active` and
+`valid` `true` while this particular site still gets no updates. Do **not** gate
+premium features on it — the customer paid, and locking them out of a site they
+already run would be exactly the punishment the fail-open rule forbids. It is a
+reason to *tell* them something, not to switch anything off.
 
 ### The Fail-Open rule (non-negotiable)
 
@@ -258,6 +266,15 @@ Once the instance exists, updates flow through the normal WordPress screens:
 
 If no valid licence: the server simply answers "no update" (HTTP 200) — the plugin
 keeps running, nothing breaks.
+
+**The activation limit applies here too** (server 1.1.0 and newer). The server
+checks whether the asking site is one of the licence's registered installations.
+An unknown site is registered silently while a slot is free — so changing domain
+or promoting a staging copy to live never costs the customer their updates.
+Only a licence that is genuinely full is refused, and then the library stores
+the reason in `blocked` and shows it on the Plugins and Updates screens by
+itself. You do not have to write any of that; just make sure your product ships
+library **0.7.0 or newer**, or the customer sees no explanation at all.
 
 > **Same-site caveat:** if the licence server runs on the *same* site as the product
 > (e.g. during local testing, or the server licensing itself), WordPress must download
