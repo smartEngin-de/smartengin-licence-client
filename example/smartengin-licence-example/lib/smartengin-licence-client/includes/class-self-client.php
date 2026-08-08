@@ -26,6 +26,9 @@ class Self_Client {
 	/** @var string Licence server base URL (no trailing slash needed). */
 	private $server_url;
 
+	/** @var string Server URL as configured in code – the anchor every relocation is checked against. */
+	private $configured_url = '';
+
 	/** @var string Product slug – must match the server product registry. */
 	private $slug;
 
@@ -35,8 +38,14 @@ class Self_Client {
 	/** @var string plugin_basename() of the host plugin. */
 	private $basename;
 
-	/** @var string Installed version of the host plugin. */
+	/** @var string Installed version of the host plugin/theme. */
 	private $version;
+
+	/** @var string Product type: 'plugin' (default) or 'theme'. */
+	private $type = 'plugin';
+
+	/** @var string Theme stylesheet (directory) slug when type is 'theme'. */
+	private $stylesheet = '';
 
 	/** @var string wp_options key holding the licence state. */
 	private $option_name;
@@ -54,11 +63,21 @@ class Self_Client {
 	 * @param array $config server_url, slug, plugin_file, version[, option_name].
 	 */
 	public function __construct( array $config ) {
-		$this->server_url  = isset( $config['server_url'] ) ? untrailingslashit( (string) $config['server_url'] ) : '';
-		$this->slug        = isset( $config['slug'] ) ? sanitize_key( $config['slug'] ) : '';
-		$this->plugin_file = isset( $config['plugin_file'] ) ? (string) $config['plugin_file'] : '';
-		$this->version     = isset( $config['version'] ) ? (string) $config['version'] : '';
-		$this->basename    = $this->plugin_file ? plugin_basename( $this->plugin_file ) : '';
+		$this->server_url = isset( $config['server_url'] ) ? untrailingslashit( (string) $config['server_url'] ) : '';
+		$this->slug       = isset( $config['slug'] ) ? sanitize_key( $config['slug'] ) : '';
+		$this->version    = isset( $config['version'] ) ? (string) $config['version'] : '';
+		$this->type       = ( isset( $config['type'] ) && 'theme' === $config['type'] ) ? 'theme' : 'plugin';
+
+		if ( 'theme' === $this->type ) {
+			// A theme identifies itself by its stylesheet (directory) slug.
+			$this->stylesheet = ( isset( $config['stylesheet'] ) && '' !== (string) $config['stylesheet'] )
+				? (string) $config['stylesheet']
+				: ( function_exists( 'get_stylesheet' ) ? (string) get_stylesheet() : '' );
+			$this->basename = $this->stylesheet; // Identity key used throughout.
+		} else {
+			$this->plugin_file = isset( $config['plugin_file'] ) ? (string) $config['plugin_file'] : '';
+			$this->basename    = $this->plugin_file ? plugin_basename( $this->plugin_file ) : '';
+		}
 
 		$base                   = str_replace( '-', '_', $this->slug );
 		$this->option_name      = isset( $config['option_name'] ) ? (string) $config['option_name'] : $base . '_license';
@@ -68,10 +87,21 @@ class Self_Client {
 		if ( '' === $this->slug || '' === $this->server_url ) {
 			return; // Misconfigured – stay inert rather than error.
 		}
+		if ( 'theme' === $this->type && '' === $this->stylesheet ) {
+			return; // Theme misconfigured (no stylesheet) – stay inert.
+		}
+
+		// Relocation channel: if a validated "server moved" address is on file,
+		// talk to that address from now on (see remember_moved_server()).
+		$this->configured_url = $this->server_url;
+		$this->adopt_moved_server();
 
 		// AJAX (backend buttons).
 		add_action( 'wp_ajax_' . $this->slug . '_activate', array( $this, 'ajax_activate' ) );
 		add_action( 'wp_ajax_' . $this->slug . '_deactivate', array( $this, 'ajax_deactivate' ) );
+
+		// Tell the customer when the server refuses updates for this website.
+		add_action( 'admin_notices', array( $this, 'blocked_notice' ) );
 
 		// Daily re-validation via WP-Cron.
 		add_action( $this->cron_hook, array( $this, 'cron_validate' ) );
@@ -79,16 +109,22 @@ class Self_Client {
 			wp_schedule_event( time() + HOUR_IN_SECONDS, 'daily', $this->cron_hook );
 		}
 
-		// WordPress update integration (C2).
-		add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'filter_update_plugins' ) );
-		add_filter( 'plugins_api', array( $this, 'plugins_api' ), 10, 3 );
+		// WordPress update integration (C2) – plugin OR theme update channel.
+		if ( 'theme' === $this->type ) {
+			add_filter( 'pre_set_site_transient_update_themes', array( $this, 'filter_update_themes' ) );
+			add_filter( 'themes_api', array( $this, 'themes_api' ), 10, 3 );
+			// Themes have no deactivation hook; clean cron when the theme is switched away.
+			add_action( 'switch_theme', array( $this, 'on_plugin_deactivate' ) );
+		} else {
+			add_filter( 'pre_set_site_transient_update_plugins', array( $this, 'filter_update_plugins' ) );
+			add_filter( 'plugins_api', array( $this, 'plugins_api' ), 10, 3 );
+			// Self-cleanup when the host plugin is deactivated.
+			if ( $this->basename ) {
+				register_deactivation_hook( $this->plugin_file, array( $this, 'on_plugin_deactivate' ) );
+			}
+		}
 		add_filter( 'upgrader_pre_download', array( $this, 'verify_download' ), 10, 4 );
 		add_action( 'upgrader_process_complete', array( $this, 'flush_update_cache' ), 10, 0 );
-
-		// Self-cleanup when the host plugin is deactivated.
-		if ( $this->basename ) {
-			register_deactivation_hook( $this->plugin_file, array( $this, 'on_plugin_deactivate' ) );
-		}
 	}
 
 	/* ======================================================================
@@ -109,6 +145,9 @@ class Self_Client {
 			'valid_until'      => null,
 			'activations_left' => null,
 			'last_check'       => 0,
+			'blocked'          => '',    // Server refused THIS site: limit_reached|trial_used_on_site|''
+			'blocked_message'  => '',    // Reason in plain words, as sent by the server.
+			'server_moved_to'  => '',    // Validated "the server moved here" address, or ''.
 		);
 		return wp_parse_args( (array) get_option( $this->option_name, array() ), $defaults );
 	}
@@ -186,7 +225,97 @@ class Self_Client {
 			$raw = substr( $raw, 3 );
 		}
 		$data = json_decode( trim( $raw ), true );
-		return array( 'code' => $code, 'data' => is_array( $data ) ? $data : array() );
+		$data = is_array( $data ) ? $data : array();
+
+		// Relocation channel: the server may quietly append "I have moved to X"
+		// to any answer. Validated and remembered here, in ONE place, so every
+		// endpoint benefits.
+		if ( ! empty( $data['server_moved'] ) ) {
+			$this->remember_moved_server( (string) $data['server_moved'] );
+		}
+
+		return array( 'code' => $code, 'data' => $data );
+	}
+
+	/* ======================================================================
+	 * Relocation channel ("the licence server moved")
+	 * ==================================================================== */
+
+	/**
+	 * Is $url an address this product may follow to?
+	 *
+	 * The whole safety of the relocation channel lives in this check: without
+	 * it, anyone who can make the client talk to their machine once could
+	 * permanently redirect the licence traffic ("moved to my-server.example").
+	 * A new address is therefore only accepted when it is HTTPS and stays in
+	 * the FAMILY of the address compiled into the product: the same host, a
+	 * subdomain of it, or its parent (smartengin.de <-> mein.smartengin.de).
+	 * The comparison anchor is always the CONFIGURED address, never a
+	 * previously adopted one – so even a chain of moves can never leave the
+	 * family.
+	 *
+	 * @param string $url Candidate server URL.
+	 * @return bool
+	 */
+	private function allowed_new_server( $url ) {
+		if ( 0 !== stripos( $url, 'https://' ) ) {
+			return false; // HTTPS only – a licence server never moves to plain HTTP.
+		}
+		$new = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		$old = strtolower( (string) wp_parse_url( $this->configured_url, PHP_URL_HOST ) );
+		if ( '' === $new || '' === $old ) {
+			return false;
+		}
+		$new = preg_replace( '#^www\.#', '', $new );
+		$old = preg_replace( '#^www\.#', '', $old );
+		return $new === $old
+			|| substr( $new, -strlen( '.' . $old ) ) === '.' . $old
+			|| substr( $old, -strlen( '.' . $new ) ) === '.' . $new;
+	}
+
+	/**
+	 * Use a stored relocation address, if there is a valid one.
+	 *
+	 * Runs once per request (from the constructor). The stored value is
+	 * re-validated on every load: should the rule above ever tighten, a
+	 * previously stored address that no longer passes simply stops being used.
+	 *
+	 * @return void
+	 */
+	private function adopt_moved_server() {
+		$state = $this->get_state();
+		$moved = isset( $state['server_moved_to'] ) ? (string) $state['server_moved_to'] : '';
+		if ( '' !== $moved && $this->allowed_new_server( $moved ) ) {
+			$this->server_url = untrailingslashit( $moved );
+		}
+	}
+
+	/**
+	 * Remember a "server moved" hint – and switch over right away.
+	 *
+	 * An address outside the family is ignored WITHOUT touching the stored
+	 * value: a rogue answer must not be able to erase a legitimate move.
+	 * The server announcing the configured address again (a move back) clears
+	 * the stored value instead of storing the obvious.
+	 *
+	 * @param string $url Announced new server URL.
+	 * @return void
+	 */
+	private function remember_moved_server( $url ) {
+		$url = untrailingslashit( trim( $url ) );
+		if ( '' === $url || ! $this->allowed_new_server( $url ) ) {
+			return;
+		}
+
+		$stored = ( $url === $this->configured_url ) ? '' : $url;
+
+		$state = $this->get_state();
+		if ( (string) $state['server_moved_to'] !== $stored ) {
+			$state['server_moved_to'] = $stored;
+			$this->set_state( $state );
+		}
+
+		$this->server_url = $url; // Effective immediately, not only next request.
 	}
 
 	/* ======================================================================
@@ -231,6 +360,12 @@ class Self_Client {
 		$state = $this->get_state();
 		$state['key'] = $key;
 
+		// The server has just re-judged this website, so any earlier block is
+		// stale either way – it is re-established on the next update check if
+		// it still applies.
+		$state['blocked']         = '';
+		$state['blocked_message'] = '';
+
 		if ( 200 === $res['code'] && ! empty( $data['success'] ) ) {
 			$state['activated']        = true;
 			$state['status']           = isset( $data['status'] ) ? (string) $data['status'] : 'active';
@@ -269,11 +404,18 @@ class Self_Client {
 			}
 		}
 
+		// Re-read: call() itself may have stored a relocation address, which a
+		// write based on the copy from before the call would silently undo.
+		$state        = $this->get_state();
+		$state['key'] = $key;
+
 		$state['activated']        = false;
 		$state['valid']            = false;
 		$state['status']           = '';
 		$state['valid_until']      = null;
 		$state['activations_left'] = null;
+		$state['blocked']          = '';
+		$state['blocked_message']  = '';
 		$this->set_state( $state );
 		$this->flush_update_cache();
 		return true;
@@ -296,6 +438,10 @@ class Self_Client {
 		if ( is_wp_error( $res ) || 200 !== $res['code'] ) {
 			return; // Keep last known good state.
 		}
+
+		// Re-read: call() itself may have stored a relocation address, which a
+		// write based on the copy from before the call would silently undo.
+		$state = $this->get_state();
 
 		$data = $res['data'];
 		$state['status']           = isset( $data['status'] ) ? (string) $data['status'] : $state['status'];
@@ -336,15 +482,57 @@ class Self_Client {
 		}
 
 		$res = $this->call( 'update', array( 'key' => $key, 'version' => $this->version ), 'GET' );
-		if ( is_wp_error( $res ) || 200 !== $res['code'] || empty( $res['data']['update'] ) ) {
+		if ( is_wp_error( $res ) || 200 !== $res['code'] ) {
 			// No-bricking: on any error just report "no update" (the plugin keeps
 			// running); the next check picks it up once the server is reachable.
+			// A stored block is deliberately left untouched here – an unreachable
+			// server must never invent one and never clear one.
 			$this->update_memo = array( 'update' => false );
 			return $this->update_memo;
 		}
 
-		$this->update_memo = $res['data'];
+		$data = is_array( $res['data'] ) ? $res['data'] : array();
+
+		// The server answered properly, so its verdict on THIS installation is
+		// current – remember it, or clear it once the site is registered again.
+		$this->remember_block( $data );
+
+		if ( empty( $data['update'] ) ) {
+			$data['update'] = false;
+		}
+
+		$this->update_memo = $data;
 		return $this->update_memo;
+	}
+
+	/**
+	 * Remember – or clear – a server-side block for this installation.
+	 *
+	 * The server answers "no update" both when there simply is none and when it
+	 * refuses THIS website (licence full, trial already used here). Only the
+	 * second case carries a 'blocked' code. Without storing it the customer
+	 * would see nothing at all and never learn why updates stopped, which is
+	 * exactly the silent failure the server-side check was built to avoid.
+	 *
+	 * Called only after a proper HTTP 200, so an unreachable server can neither
+	 * invent nor clear a block. Writes only on a real change: the update check
+	 * runs often and a needless option write each time would be pure load.
+	 *
+	 * @param array $data Decoded server answer.
+	 * @return void
+	 */
+	private function remember_block( array $data ) {
+		$code    = isset( $data['blocked'] ) ? (string) $data['blocked'] : '';
+		$message = ( '' !== $code && isset( $data['message'] ) ) ? (string) $data['message'] : '';
+
+		$state = $this->get_state();
+		if ( (string) $state['blocked'] === $code && (string) $state['blocked_message'] === $message ) {
+			return;
+		}
+
+		$state['blocked']         = $code;
+		$state['blocked_message'] = $message;
+		$this->set_state( $state );
 	}
 
 	/**
@@ -450,6 +638,92 @@ class Self_Client {
 	}
 
 	/**
+	 * Inject our update into the THEME update transient. Theme entries are arrays
+	 * (not objects) keyed by the stylesheet slug — this is the theme equivalent of
+	 * filter_update_plugins().
+	 *
+	 * @param mixed $transient Update transient (object) or empty.
+	 * @return mixed
+	 */
+	public function filter_update_themes( $transient ) {
+		if ( ! is_object( $transient ) || empty( $transient->checked ) ) {
+			return $transient;
+		}
+
+		$info = $this->check_update();
+
+		// Version WordPress currently sees installed (prefer it over the captured
+		// constant, which can still hold the OLD number right after an update).
+		$installed = ! empty( $transient->checked[ $this->stylesheet ] )
+			? (string) $transient->checked[ $this->stylesheet ]
+			: $this->version;
+
+		if ( ! empty( $info['update'] ) && version_compare( $installed, (string) $info['new_version'], '<' ) ) {
+			$transient->response[ $this->stylesheet ] = array(
+				'theme'        => $this->stylesheet,
+				'new_version'  => (string) $info['new_version'],
+				'url'          => isset( $info['homepage_url'] ) ? (string) $info['homepage_url'] : '',
+				'package'      => isset( $info['package'] ) ? (string) $info['package'] : '',
+				'requires'     => isset( $info['requires'] ) ? (string) $info['requires'] : '',
+				'requires_php' => isset( $info['requires_php'] ) ? (string) $info['requires_php'] : '',
+			);
+			unset( $transient->no_update[ $this->stylesheet ] );
+		} else {
+			// Signals "up to date" so WordPress shows no false update.
+			$transient->no_update[ $this->stylesheet ] = array(
+				'theme'       => $this->stylesheet,
+				'new_version' => $installed,
+				'url'         => '',
+				'package'     => '',
+			);
+		}
+
+		return $transient;
+	}
+
+	/**
+	 * Provide the theme "View version details" popup data (theme_information).
+	 *
+	 * @param mixed  $result Default result.
+	 * @param string $action API action.
+	 * @param object $args   Query args.
+	 * @return mixed
+	 */
+	public function themes_api( $result, $action, $args ) {
+		if ( 'theme_information' !== $action || empty( $args->slug ) || $args->slug !== $this->stylesheet ) {
+			return $result;
+		}
+
+		$info    = $this->check_update();
+		$version = ! empty( $info['update'] ) ? (string) $info['new_version'] : $this->version;
+		$theme   = function_exists( 'wp_get_theme' ) ? wp_get_theme( $this->stylesheet ) : null;
+		$exists  = ( $theme && $theme->exists() );
+
+		$changelog = isset( $info['changelog_url'] ) && $info['changelog_url']
+			? sprintf(
+				/* translators: %s: changelog URL */
+				__( 'See the full changelog: %s', 'smartengin-licence-client' ),
+				'<a href="' . esc_url( $info['changelog_url'] ) . '" target="_blank" rel="noopener">' . esc_html( $info['changelog_url'] ) . '</a>'
+			)
+			: __( 'No changelog available.', 'smartengin-licence-client' );
+
+		$obj                = new stdClass();
+		$obj->name          = $exists ? $theme->get( 'Name' ) : $this->slug;
+		$obj->slug          = $this->stylesheet;
+		$obj->version       = $version;
+		$obj->author        = $exists ? wp_strip_all_tags( $theme->get( 'Author' ) ) : '';
+		$obj->requires      = isset( $info['requires'] ) ? (string) $info['requires'] : '';
+		$obj->requires_php  = isset( $info['requires_php'] ) ? (string) $info['requires_php'] : '';
+		$obj->download_link = isset( $info['package'] ) ? (string) $info['package'] : '';
+		$obj->sections      = array(
+			'description' => $exists ? $theme->get( 'Description' ) : '',
+			'changelog'   => $changelog,
+		);
+
+		return $obj;
+	}
+
+	/**
 	 * Verify the downloaded update against the server-provided SHA-256 (E9).
 	 *
 	 * Hooked on `upgrader_pre_download`. Only acts on this product's own update
@@ -466,7 +740,11 @@ class Self_Client {
 	 * @return mixed False, a local file path, or WP_Error.
 	 */
 	public function verify_download( $reply, $package, $upgrader = null, $hook_extra = array() ) {
-		if ( empty( $hook_extra['plugin'] ) || $hook_extra['plugin'] !== $this->basename ) {
+		// Only act on THIS product's own update (plugin key or theme key).
+		$mine = ( 'theme' === $this->type )
+			? ( ! empty( $hook_extra['theme'] ) && $hook_extra['theme'] === $this->stylesheet )
+			: ( ! empty( $hook_extra['plugin'] ) && $hook_extra['plugin'] === $this->basename );
+		if ( ! $mine ) {
 			return $reply;
 		}
 
@@ -607,6 +885,78 @@ class Self_Client {
 	}
 
 	/**
+	 * Plain-words reason for a server-side block.
+	 *
+	 * Prefers the server's own wording: it knows exactly which rule was hit and
+	 * speaks the vendor's language. Falls back to a generic line when only the
+	 * code arrived (e.g. an older server).
+	 *
+	 * @param array $state Licence state.
+	 * @return string
+	 */
+	private function blocked_text( array $state ) {
+		$message = isset( $state['blocked_message'] ) ? (string) $state['blocked_message'] : '';
+		if ( '' !== $message ) {
+			return $message;
+		}
+		if ( 'trial_used_on_site' === (string) $state['blocked'] ) {
+			return __( 'This website has already used its free trial, so it receives no updates.', 'smartengin-licence-client' );
+		}
+		return __( 'This website is not registered for this licence, so it receives no updates.', 'smartengin-licence-client' );
+	}
+
+	/**
+	 * Display name of the host product, for messages the customer reads.
+	 *
+	 * @return string
+	 */
+	private function product_name() {
+		if ( 'theme' === $this->type ) {
+			$theme = function_exists( 'wp_get_theme' ) ? wp_get_theme( $this->stylesheet ) : null;
+			return ( $theme && $theme->exists() ) ? (string) $theme->get( 'Name' ) : $this->slug;
+		}
+		if ( $this->plugin_file && function_exists( 'get_plugin_data' ) && is_file( $this->plugin_file ) ) {
+			$data = get_plugin_data( $this->plugin_file, false, false );
+			if ( ! empty( $data['Name'] ) ) {
+				return (string) $data['Name'];
+			}
+		}
+		return $this->slug;
+	}
+
+	/**
+	 * Warn on the plugins / updates / themes screens when the licence server
+	 * refuses updates for THIS website.
+	 *
+	 * Without this the customer only ever sees "no update available" and never
+	 * learns the reason – the silent failure the server-side activation check
+	 * would otherwise introduce. It never disables anything: the product keeps
+	 * running, only the update channel is paused.
+	 *
+	 * @return void
+	 */
+	public function blocked_notice() {
+		$screen = function_exists( 'get_current_screen' ) ? get_current_screen() : null;
+		if ( ! $screen || ! in_array( $screen->id, array( 'plugins', 'update-core', 'themes' ), true ) ) {
+			return;
+		}
+		if ( ! current_user_can( 'theme' === $this->type ? 'update_themes' : 'update_plugins' ) ) {
+			return;
+		}
+
+		$state = $this->get_state();
+		if ( '' === (string) $state['blocked'] ) {
+			return;
+		}
+
+		printf(
+			'<div class="notice notice-warning"><p><strong>%1$s</strong> %2$s</p></div>',
+			esc_html( $this->product_name() . ':' ),
+			esc_html( $this->blocked_text( $state ) )
+		);
+	}
+
+	/**
 	 * Human-readable status line HTML.
 	 *
 	 * @return string
@@ -616,6 +966,12 @@ class Self_Client {
 
 		if ( empty( $state['activated'] ) ) {
 			return '<span class="self-status self-status--inactive">' . esc_html__( 'Not activated.', 'smartengin-licence-client' ) . '</span>';
+		}
+
+		// A block outranks the licence status: the key itself can be perfectly
+		// fine while THIS website still receives no updates.
+		if ( '' !== (string) $state['blocked'] ) {
+			return '<span class="self-status self-status--expired">' . esc_html( $this->blocked_text( $state ) ) . '</span>';
 		}
 
 		switch ( (string) $state['status'] ) {

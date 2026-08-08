@@ -284,6 +284,38 @@ library **0.7.0 or newer**, or the customer sees no explanation at all.
 
 ---
 
+## 7b. If your licence server ever moves
+
+Your products carry the server address baked into their code — so plan for the
+day that address changes **before** you ship. Two nets exist:
+
+**The relocation channel (library 0.7.0+, server 1.1.0+, built in).** On the
+old server, set *Settings → General → "Server has moved to"*. Every licence
+answer then carries a quiet `server_moved` hint; the library validates it,
+stores it, and asks the new address from then on. Safety rules the library
+enforces on its end: HTTPS only, and the new address must stay in the **same
+domain family** as the address compiled into the product (`example.com` ↔
+`shop.example.com`) — otherwise one rogue answer could redirect your licence
+traffic for good. Keep the old server answering until your installed base has
+checked in once (a day of overlap usually covers the daily validation cron).
+
+**The redirect fallback (for copies shipped with an older library).** Keep the
+old domain and redirect it to the new server. One detail decides success:
+
+- `update` is a **GET** → any ordinary redirect (301/302) works.
+- `activate` / `deactivate` / `validate` are **POST** with the data in the
+  body → a 301/302 turns them into GET and the data is lost. Use a
+  **308 Permanent Redirect** (method-preserving) for
+  `/wp-json/sels/v1/activate|deactivate|validate`.
+
+Nginx example (on the old host):
+
+```nginx
+location /wp-json/sels/v1/ { return 308 https://new.example.com$request_uri; }
+```
+
+---
+
 ## 8. Test your integration
 
 1. On the server, create a product with your slug and a test purchase option, and

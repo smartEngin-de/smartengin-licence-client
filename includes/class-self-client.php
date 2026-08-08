@@ -26,6 +26,9 @@ class Self_Client {
 	/** @var string Licence server base URL (no trailing slash needed). */
 	private $server_url;
 
+	/** @var string Server URL as configured in code – the anchor every relocation is checked against. */
+	private $configured_url = '';
+
 	/** @var string Product slug – must match the server product registry. */
 	private $slug;
 
@@ -88,6 +91,11 @@ class Self_Client {
 			return; // Theme misconfigured (no stylesheet) – stay inert.
 		}
 
+		// Relocation channel: if a validated "server moved" address is on file,
+		// talk to that address from now on (see remember_moved_server()).
+		$this->configured_url = $this->server_url;
+		$this->adopt_moved_server();
+
 		// AJAX (backend buttons).
 		add_action( 'wp_ajax_' . $this->slug . '_activate', array( $this, 'ajax_activate' ) );
 		add_action( 'wp_ajax_' . $this->slug . '_deactivate', array( $this, 'ajax_deactivate' ) );
@@ -139,6 +147,7 @@ class Self_Client {
 			'last_check'       => 0,
 			'blocked'          => '',    // Server refused THIS site: limit_reached|trial_used_on_site|''
 			'blocked_message'  => '',    // Reason in plain words, as sent by the server.
+			'server_moved_to'  => '',    // Validated "the server moved here" address, or ''.
 		);
 		return wp_parse_args( (array) get_option( $this->option_name, array() ), $defaults );
 	}
@@ -216,7 +225,97 @@ class Self_Client {
 			$raw = substr( $raw, 3 );
 		}
 		$data = json_decode( trim( $raw ), true );
-		return array( 'code' => $code, 'data' => is_array( $data ) ? $data : array() );
+		$data = is_array( $data ) ? $data : array();
+
+		// Relocation channel: the server may quietly append "I have moved to X"
+		// to any answer. Validated and remembered here, in ONE place, so every
+		// endpoint benefits.
+		if ( ! empty( $data['server_moved'] ) ) {
+			$this->remember_moved_server( (string) $data['server_moved'] );
+		}
+
+		return array( 'code' => $code, 'data' => $data );
+	}
+
+	/* ======================================================================
+	 * Relocation channel ("the licence server moved")
+	 * ==================================================================== */
+
+	/**
+	 * Is $url an address this product may follow to?
+	 *
+	 * The whole safety of the relocation channel lives in this check: without
+	 * it, anyone who can make the client talk to their machine once could
+	 * permanently redirect the licence traffic ("moved to my-server.example").
+	 * A new address is therefore only accepted when it is HTTPS and stays in
+	 * the FAMILY of the address compiled into the product: the same host, a
+	 * subdomain of it, or its parent (smartengin.de <-> mein.smartengin.de).
+	 * The comparison anchor is always the CONFIGURED address, never a
+	 * previously adopted one – so even a chain of moves can never leave the
+	 * family.
+	 *
+	 * @param string $url Candidate server URL.
+	 * @return bool
+	 */
+	private function allowed_new_server( $url ) {
+		if ( 0 !== stripos( $url, 'https://' ) ) {
+			return false; // HTTPS only – a licence server never moves to plain HTTP.
+		}
+		$new = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		$old = strtolower( (string) wp_parse_url( $this->configured_url, PHP_URL_HOST ) );
+		if ( '' === $new || '' === $old ) {
+			return false;
+		}
+		$new = preg_replace( '#^www\.#', '', $new );
+		$old = preg_replace( '#^www\.#', '', $old );
+		return $new === $old
+			|| substr( $new, -strlen( '.' . $old ) ) === '.' . $old
+			|| substr( $old, -strlen( '.' . $new ) ) === '.' . $new;
+	}
+
+	/**
+	 * Use a stored relocation address, if there is a valid one.
+	 *
+	 * Runs once per request (from the constructor). The stored value is
+	 * re-validated on every load: should the rule above ever tighten, a
+	 * previously stored address that no longer passes simply stops being used.
+	 *
+	 * @return void
+	 */
+	private function adopt_moved_server() {
+		$state = $this->get_state();
+		$moved = isset( $state['server_moved_to'] ) ? (string) $state['server_moved_to'] : '';
+		if ( '' !== $moved && $this->allowed_new_server( $moved ) ) {
+			$this->server_url = untrailingslashit( $moved );
+		}
+	}
+
+	/**
+	 * Remember a "server moved" hint – and switch over right away.
+	 *
+	 * An address outside the family is ignored WITHOUT touching the stored
+	 * value: a rogue answer must not be able to erase a legitimate move.
+	 * The server announcing the configured address again (a move back) clears
+	 * the stored value instead of storing the obvious.
+	 *
+	 * @param string $url Announced new server URL.
+	 * @return void
+	 */
+	private function remember_moved_server( $url ) {
+		$url = untrailingslashit( trim( $url ) );
+		if ( '' === $url || ! $this->allowed_new_server( $url ) ) {
+			return;
+		}
+
+		$stored = ( $url === $this->configured_url ) ? '' : $url;
+
+		$state = $this->get_state();
+		if ( (string) $state['server_moved_to'] !== $stored ) {
+			$state['server_moved_to'] = $stored;
+			$this->set_state( $state );
+		}
+
+		$this->server_url = $url; // Effective immediately, not only next request.
 	}
 
 	/* ======================================================================
@@ -305,6 +404,11 @@ class Self_Client {
 			}
 		}
 
+		// Re-read: call() itself may have stored a relocation address, which a
+		// write based on the copy from before the call would silently undo.
+		$state        = $this->get_state();
+		$state['key'] = $key;
+
 		$state['activated']        = false;
 		$state['valid']            = false;
 		$state['status']           = '';
@@ -334,6 +438,10 @@ class Self_Client {
 		if ( is_wp_error( $res ) || 200 !== $res['code'] ) {
 			return; // Keep last known good state.
 		}
+
+		// Re-read: call() itself may have stored a relocation address, which a
+		// write based on the copy from before the call would silently undo.
+		$state = $this->get_state();
 
 		$data = $res['data'];
 		$state['status']           = isset( $data['status'] ) ? (string) $data['status'] : $state['status'];

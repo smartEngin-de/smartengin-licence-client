@@ -15,9 +15,21 @@
  *         'text_domain' => 'your-product-slug',
  *     ) );
  *
+ * For a THEME, add 'type' => 'theme' and pass the theme's stylesheet + version
+ * instead of a plugin file (call this from the theme's functions.php):
+ *
+ *     new Self_Client( array(
+ *         'server_url' => 'https://your-licence-server.example',
+ *         'slug'       => 'your-theme-slug',      // = product slug on the server
+ *         'type'       => 'theme',
+ *         'stylesheet' => get_stylesheet(),       // theme directory slug
+ *         'version'    => wp_get_theme()->get( 'Version' ),
+ *     ) );
+ *
  * The library is deliberately generic: it never touches product internals, so
- * the same code serves every smartEngin product (and later non-WP software via
- * the same REST API). All products should bundle the SAME library version.
+ * the same code serves every smartEngin product (plugin OR theme; and non-WP
+ * software via the same REST API). All products should bundle the SAME library
+ * version.
  *
  * @package SmartEnginLicenceClient
  */
@@ -26,9 +38,15 @@ if ( ! defined( 'ABSPATH' ) ) {
 	exit;
 }
 
-// Bump when the library changes; the highest version loaded across all plugins wins.
+// Bump when the library changes.
+//
+// Careful: when several products bundle this library on the same site, the copy
+// that is loaded FIRST wins – there is no version comparison (class_exists()
+// below simply skips every later copy, whatever its version). So all products
+// must ship the SAME library version; an old copy in any one plugin silently
+// downgrades the library for all of them.
 if ( ! defined( 'SELF_CLIENT_VERSION' ) ) {
-	define( 'SELF_CLIENT_VERSION', '0.5.2' );
+	define( 'SELF_CLIENT_VERSION', '0.7.0' );
 }
 
 if ( ! class_exists( 'Self_Client' ) ) {

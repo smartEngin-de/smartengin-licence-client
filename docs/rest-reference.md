@@ -191,6 +191,22 @@ exactly as before; a current client reads `blocked` and tells the customer why.
 `message` is plain wording in the **licence server's** language, meant to be
 shown to the customer as-is. Never key logic off `message`; use `blocked`.
 
+### `server_moved` (rides along on every licence answer)
+
+When the server owner has announced a permanent move (since server 1.1.0), every
+answer of the four licence endpoints — success and refusal alike — additionally
+carries:
+
+```json
+{ "…": "…", "server_moved": "https://new.example.com" }
+```
+
+Client library 0.7.0+ handles this by itself: it validates the address (HTTPS
+only, same domain family as the configured server) and asks there from then on.
+If you build your own client, apply the same validation — following an
+unvalidated `server_moved` would let a single spoofed answer redirect your
+licence traffic permanently.
+
 **Update available `200`** — the product's **platform** shapes the payload.
 
 WordPress plugin (carries the WordPress-only `requires` / `requires_php` / `tested`):

@@ -290,6 +290,7 @@ components:
       properties:
         success: { type: boolean, example: true }
         update: { type: boolean, example: false }
+        server_moved: { type: string, format: uri, description: "Optional, on every licence answer since server 1.1.0: the server has permanently moved here. Clients must validate (HTTPS, same domain family as the configured server) before following." }
     UpdateBlocked:
       type: object
       description: >
