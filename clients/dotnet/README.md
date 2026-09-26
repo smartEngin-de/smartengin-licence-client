@@ -11,9 +11,10 @@ WordPress plugins update themselves, but for desktop software.
 
 1. **Activate** the device against a licence key (device id = a stable, anonymous
    identifier; no personal data leaves the machine).
-2. **Validate** periodically, **fail-open**: if the server is unreachable the last
-   known status is used, so an outage never bricks a paying customer.
-3. **Self-update**: ask the server for a newer version, download it, verify its
+2. **Validate** periodically. If the server is unreachable the last known status
+   is used, so an outage never bricks a paying customer.
+3. **Gate premium features** with `status.FeaturesEnabled` (see below).
+4. **Self-update**: ask the server for a newer version, download it, verify its
    **SHA-256**, then silently replace the running `.exe` and restart.
 
 Everything talks to the server's public `sels/v1` REST API. No external NuGet
@@ -57,13 +58,40 @@ var updater = new Updater(options);
 
 // 3) Activate / validate / update.
 await client.ActivateAsync(key);
-var status = await client.ValidateAsync(key);   // status.FeaturesEnabled gates premium features
+var status = await client.ValidateAsync(key);
+if (status.FeaturesEnabled) { /* premium on */ } // see "When premium features switch off"
 var update = await updater.CheckForUpdateAsync(key);
 if (update is not null) {
     var pkg = await updater.DownloadAndVerifyAsync(update);
     updater.ApplyUpdateAndRestart(pkg);          // replaces the .exe and restarts
 }
 ```
+
+## When premium features switch off (library 0.2.0)
+
+`status.FeaturesEnabled` is **the** check. It follows the server's rule
+(smartEngin Licence & buy 1.6.43 and later):
+
+| Licence | `status.Mode` | `FeaturesEnabled` |
+|---|---|---|
+| Active, or lifetime | `Licensed` | on |
+| Expired **one-off purchase** | `Licensed` | on — only updates stop |
+| Expired **subscription**, within `GraceDays` (3) of its end date | `Grace` | on — ask the customer to renew; `status.LockTime` is the switch-off moment (UTC) |
+| Expired subscription, grace days over | `Locked` | **off** |
+| Refunded or disabled | `Locked` | **off** |
+| Unknown / server never reached | `Licensed` | on (fail-open) |
+
+- `status.EffectiveState` shows "expired" the moment the end date passes, even
+  when the last server answer still said "active".
+- The decision uses the **cached** status only, never a server call: the lock
+  happens on time even offline, and a server outage can never switch a paying
+  customer off early. A renewal moves the date forward on the next validation,
+  and the features come back on their own.
+- A server older than 1.6.43 does not send `subscription` / `grace_days`; the
+  licence is then treated as a one-off purchase and never locks (as in 0.1.0).
+- `ActivateAsync` on a **new** device with an expired key fails with
+  `Error == "license_expired"` and a readable `Message` from the server. A device
+  that already had the key stays activated.
 
 ## How the silent update works
 
@@ -95,7 +123,6 @@ licensing system.
 
 ## Note: Python apps
 
-The same server and the same update mechanism (download → verify SHA-256 → swap
-the locked single-file exe via a helper) will be mirrored in a Python client
-later, for PyInstaller `--onefile` apps such as KIFOX Chat. This .NET client is
-the reference implementation.
+The same server, the same licence rule and the same update mechanism (download →
+verify SHA-256 → swap the locked single-file exe via a helper) are available for
+PyInstaller `--onefile` apps in the Python client: [`../python/`](../python/).

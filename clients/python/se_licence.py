@@ -18,8 +18,10 @@ Drei Bausteine, identisch zur .NET-Vorlage:
   * Updater       – /update pruefen, Paket laden, SHA-256 pruefen, laufende .exe
                     per Austausch-Helfer ersetzen und neu starten (--onefile-tauglich).
 
-Kein-Bricking ist Prinzip: nur ein bestaetigt zurueckerstatteter/deaktivierter
-Schluessel schaltet Pro-Funktionen ab; ein Serverausfall tut das nie.
+Wann Pro-Funktionen abschalten (0.2.0, gleiche Regel wie PHP-Baukasten 0.8.0):
+erstattet/deaktiviert sofort; ein abgelaufenes ABO nach `grace_days` (Server: 3)
+Kulanz; ein abgelaufener Einmalkauf nie (nur Updates stoppen). Entschieden wird
+nur aus dem gespeicherten Zustand – ein Serverausfall sperrt nie frueher.
 """
 import os
 import sys
@@ -27,11 +29,15 @@ import json
 import time
 import uuid
 import socket
+import calendar
 import hashlib
 import tempfile
 import subprocess
+import urllib.error
 import urllib.parse
 import urllib.request
+
+__version__ = "0.2.0"
 
 # ---------------------------------------------------------------------------
 # Ablageorte (pro Produkt-Slug), spiegelt LicencePaths der .NET-Lib.
@@ -121,13 +127,23 @@ def load_key(slug: str) -> str:
         return ""
 
 
+def has_key(slug: str) -> bool:
+    """True, sobald einmal erfolgreich aktiviert wurde (Schluessel liegt lokal)."""
+    return bool(load_key(slug))
+
+
 def is_licensed(slug: str) -> bool:
     """
-    True, sobald einmal erfolgreich aktiviert wurde (Schluessel liegt lokal).
-    Bewusst nur der gespeicherte Schluessel – danach gilt fail-open, ein
-    Serverausfall darf die App nie sperren.
+    DIE Frage fuer Pro-Funktionen (0.2.0). Ohne Serveraufruf, nur aus dem
+    gespeicherten Zustand: kein Schluessel → False; ein abgelaufenes Abo nach
+    seinen Kulanztagen oder ein erstatteter/deaktivierter Schluessel → False;
+    sonst True (auch ohne gespeicherten Status – fail-open).
+    Bis 0.1.0 hiess das nur „Schluessel liegt lokal" – das ist jetzt has_key().
     """
-    return bool(load_key(slug))
+    if not has_key(slug):
+        return False
+    cached = _load_status(slug)
+    return cached is None or status_mode(cached) != "locked"
 
 
 def _save_status(slug: str, status: dict) -> None:
@@ -144,9 +160,14 @@ def _load_status(slug: str):
     try:
         with open(os.path.join(data_dir(slug), _STATUS_FILE), "r", encoding="utf-8") as f:
             s = json.load(f)
+        if not isinstance(s, dict):
+            return None
         s["from_cache"] = True
-        return s
-    except (OSError, json.JSONDecodeError):
+        # Aeltere Cache-Dateien (0.1.0) kennen Abo/Kulanz nicht → nie gesperrt.
+        s.setdefault("subscription", False)
+        s.setdefault("grace_days", 0)
+        return _decorate(s)  # Sperre fuer JETZT neu berechnen, nicht die alte uebernehmen
+    except (OSError, ValueError):
         return None
 
 
@@ -172,11 +193,27 @@ class LicenceOptions:
 _TIMEOUT = 20
 
 
-def _post(url: str, fields: dict) -> dict:
+def _post(url: str, fields: dict, error_body: bool = False) -> dict:
+    """
+    POST und JSON lesen. Mit error_body=True liefert eine Ablehnung des Servers
+    (403 license_expired, 409 limit_reached …) ihren JSON-Inhalt zurueck, statt
+    als Netzfehler zu enden; eine Fehlerseite ohne JSON wirft weiter.
+    """
     data = urllib.parse.urlencode(fields).encode("utf-8")
     req = urllib.request.Request(url, data=data, method="POST")
-    with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(req, timeout=_TIMEOUT) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+    except urllib.error.HTTPError as ex:
+        if not error_body:
+            raise
+        try:
+            root = json.loads(ex.read().decode("utf-8"))
+        except (ValueError, OSError):
+            raise ex from None
+        if not isinstance(root, dict):
+            raise ex from None
+        return root
 
 
 def _get(url: str) -> dict:
@@ -185,12 +222,67 @@ def _get(url: str) -> dict:
         return json.loads(resp.read().decode("utf-8"))
 
 
-def _features_enabled(state: str) -> bool:
-    """Fail-open: nur bestaetigt zurueckerstattet/deaktiviert schaltet ab."""
-    return state not in ("refunded", "disabled")
+# ---------------------------------------------------------------------------
+# Sperr-Entscheidung (0.2.0) – spiegelt Self_Client::mode() / lock_time().
+# ---------------------------------------------------------------------------
+
+def _until_ts(status: dict):
+    """valid_until als Unix-Zeit. Der Server schreibt es in UTC ("Y-m-d H:i:s")."""
+    vu = status.get("valid_until")
+    if not vu:
+        return None
+    try:
+        return calendar.timegm(time.strptime(str(vu)[:19].replace("T", " "), "%Y-%m-%d %H:%M:%S"))
+    except ValueError:
+        return None
 
 
-def _parse_status(root: dict) -> dict:
+def effective_state(status: dict) -> str:
+    """Der Zustand, wie er IST: "active" mit verstrichenem Datum = "expired"."""
+    state = str(status.get("state") or "unknown")
+    until = _until_ts(status)
+    if state == "active" and until is not None and until <= time.time():
+        return "expired"
+    return state
+
+
+def lock_time(status: dict):
+    """Wann die Pro-Funktionen eines abgelaufenen ABOS abschalten (Unix-Zeit),
+    sonst None (Einmalkauf, lebenslang, kein Datum)."""
+    until = _until_ts(status)
+    if not status.get("subscription") or until is None:
+        return None
+    return until + max(0, int(status.get("grace_days") or 0)) * 86400
+
+
+def status_mode(status: dict) -> str:
+    """
+    "licensed" | "grace" | "locked".
+      licensed: gueltig, abgelaufener EINMALKAUF oder unbekannt (fail-open)
+      grace:    abgelaufenes ABO innerhalb der Kulanztage
+      locked:   erstattet/deaktiviert, oder Abo nach den Kulanztagen
+    Nur aus dem gespeicherten Status – sperrt puenktlich auch offline, und ein
+    Serverausfall sperrt nie frueher (jede Verlaengerung schiebt das Datum).
+    """
+    state = effective_state(status)
+    if state in ("refunded", "disabled"):
+        return "locked"
+    if state != "expired" or not status.get("subscription"):
+        return "licensed"
+    lock = lock_time(status)
+    return "grace" if lock is not None and time.time() < lock else "locked"
+
+
+def _decorate(status: dict) -> dict:
+    """Die abgeleiteten Felder fuer JETZT (neu) berechnen – auch fuer den Cache."""
+    status["effective_state"] = effective_state(status)
+    status["lock_time"] = lock_time(status)
+    status["mode"] = status_mode(status)
+    status["features_enabled"] = status["mode"] != "locked"
+    return status
+
+
+def _parse_status(root: dict, previous=None) -> dict:
     state = str(root.get("status") or "unknown")
     if state not in ("active", "expired", "refunded", "disabled"):
         state = "unknown"
@@ -199,15 +291,25 @@ def _parse_status(root: dict) -> dict:
         valid = bool(root.get("valid"))
     else:
         valid = state == "active"
-    return {
+    # Abo + Kulanz nur uebernehmen, wenn der Server sie schickt (L&b 1.6.43+);
+    # sonst gilt der vorige Wert (frische Installation: kein Abo = nie gesperrt).
+    previous = previous or {}
+    subscription = bool(previous.get("subscription", False))
+    if isinstance(root.get("subscription"), bool):
+        subscription = root["subscription"]
+    grace_days = int(previous.get("grace_days") or 0)
+    if isinstance(root.get("grace_days"), int) and not isinstance(root.get("grace_days"), bool):
+        grace_days = max(0, root["grace_days"])
+    return _decorate({
         "valid": valid,
         "state": state,
         "valid_until": root.get("valid_until") or None,
         "activations_left": root.get("activations_left"),
+        "subscription": subscription,
+        "grace_days": grace_days,
         "checked_at": time.time(),
         "from_cache": False,
-        "features_enabled": _features_enabled(state),
-    }
+    })
 
 
 class LicenceClient:
@@ -229,9 +331,9 @@ class LicenceClient:
             if self.o.label:
                 fields["label"] = self.o.label
 
-            root = _post(self.o.api_base + "/activate", fields)
+            root = _post(self.o.api_base + "/activate", fields, error_body=True)
             if root.get("success") is True:
-                status = _parse_status(root)
+                status = _parse_status(root, _load_status(self.o.product_slug))
                 _save_status(self.o.product_slug, status)
                 return {"success": True, "status": status}
             return {
@@ -255,23 +357,23 @@ class LicenceClient:
                 "instance_type": self.o.instance_type,
             }
             root = _post(self.o.api_base + "/validate", fields)
-            status = _parse_status(root)
+            status = _parse_status(root, _load_status(self.o.product_slug))
             _save_status(self.o.product_slug, status)
             return status
         except Exception:  # noqa: BLE001
             cached = _load_status(self.o.product_slug)
             if cached is not None:
-                cached["features_enabled"] = _features_enabled(cached.get("state", "unknown"))
                 return cached
-            return {
+            return _decorate({
                 "valid": True,
                 "state": "unknown",
                 "valid_until": None,
                 "activations_left": None,
+                "subscription": False,
+                "grace_days": 0,
                 "checked_at": time.time(),
                 "from_cache": True,
-                "features_enabled": True,
-            }
+            })
 
     def deactivate(self, key: str) -> None:
         """Aktivierungs-Slot dieses Geraets freigeben. Best-effort (wirft nie)."""

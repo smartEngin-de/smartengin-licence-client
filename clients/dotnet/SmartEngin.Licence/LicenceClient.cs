@@ -50,7 +50,7 @@ public sealed class LicenceClient
 
             if (root.TryGetProperty("success", out var ok) && ok.ValueKind == JsonValueKind.True)
             {
-                var status = ParseStatus(root);
+                var status = ParseStatus(root, LicenceCache.Load(_o.ProductSlug));
                 LicenceCache.Save(_o.ProductSlug, status);
                 return new ActivationResult { Success = true, Status = status };
             }
@@ -83,7 +83,7 @@ public sealed class LicenceClient
             };
 
             using var doc = await _api.PostAsync("/validate", form, ct).ConfigureAwait(false);
-            var status = ParseStatus(doc.RootElement);
+            var status = ParseStatus(doc.RootElement, LicenceCache.Load(_o.ProductSlug));
             LicenceCache.Save(_o.ProductSlug, status);
             return status;
         }
@@ -110,8 +110,11 @@ public sealed class LicenceClient
         catch { /* deactivation is best-effort */ }
     }
 
-    /// <summary>Parse a /activate or /validate body into a status.</summary>
-    private static LicenceStatus ParseStatus(JsonElement root)
+    /// <summary>Parse a /activate or /validate body into a status. The lock terms
+    /// (subscription, grace_days) are only taken when the server sends them; a
+    /// server older than L&amp;b 1.6.43 does not, and the previous values stay
+    /// (a fresh install: no subscription, i.e. never locked).</summary>
+    private static LicenceStatus ParseStatus(JsonElement root, LicenceStatus? previous)
     {
         var statusText = GetString(root, "status");
 
@@ -131,8 +134,10 @@ public sealed class LicenceClient
 
         DateTime? until = null;
         var vu = GetString(root, "valid_until");
+        // Der Server schreibt valid_until in UTC ("2026-09-25 10:00:00", ohne Kennung).
         if (!string.IsNullOrEmpty(vu)
-            && DateTime.TryParse(vu, CultureInfo.InvariantCulture, DateTimeStyles.None, out var dt))
+            && DateTime.TryParse(vu, CultureInfo.InvariantCulture,
+                DateTimeStyles.AssumeUniversal | DateTimeStyles.AdjustToUniversal, out var dt))
         {
             until = dt;
         }
@@ -143,12 +148,28 @@ public sealed class LicenceClient
             left = al.GetInt32();
         }
 
+        bool subscription = previous?.Subscription ?? false;
+        if (root.TryGetProperty("subscription", out var sub)
+            && (sub.ValueKind == JsonValueKind.True || sub.ValueKind == JsonValueKind.False))
+        {
+            subscription = sub.ValueKind == JsonValueKind.True;
+        }
+
+        int graceDays = previous?.GraceDays ?? 0;
+        if (root.TryGetProperty("grace_days", out var gd) && gd.ValueKind == JsonValueKind.Number
+            && gd.TryGetInt32(out var g))
+        {
+            graceDays = Math.Max(0, g);
+        }
+
         return new LicenceStatus
         {
             Valid = valid,
             State = state,
             ValidUntil = until,
             ActivationsLeft = left,
+            Subscription = subscription,
+            GraceDays = graceDays,
             CheckedAt = DateTimeOffset.UtcNow,
             FromCache = false,
         };

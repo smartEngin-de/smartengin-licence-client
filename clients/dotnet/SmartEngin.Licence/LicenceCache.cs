@@ -44,6 +44,8 @@ internal static class LicenceCache
                 State = s.State,
                 ValidUntil = s.ValidUntil,
                 ActivationsLeft = s.ActivationsLeft,
+                Subscription = s.Subscription,
+                GraceDays = s.GraceDays,
                 CheckedAt = s.CheckedAt,
                 FromCache = true,
             };

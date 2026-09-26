@@ -96,15 +96,31 @@ if (activation.Success)
     Console.WriteLine($"Activated. State: {st.State}, valid until: {(st.ValidUntil?.ToString() ?? "lifetime")}, "
         + $"activations left: {(st.ActivationsLeft?.ToString() ?? "unlimited")}.");
 }
+else if (activation.Error == "license_expired")
+{
+    // An expired key cannot claim a NEW device. The server's text says why.
+    Console.WriteLine($"Activation refused: {activation.Message}");
+}
 else
 {
     Console.WriteLine($"Activation failed: {activation.Error} — {activation.Message}");
 }
 
-// 4) Validate (fail-open) and gate features.
+// 4) Validate and gate features. FeaturesEnabled is THE check: an expired
+//    one-off purchase keeps working, an expired subscription switches off after
+//    its grace days, and an unreachable server never switches anything off.
 var status = await client.ValidateAsync(key);
-Console.WriteLine($"Validation: state {status.State}, features "
+Console.WriteLine($"Validation: state {status.EffectiveState}, mode {status.Mode}, features "
     + $"{(status.FeaturesEnabled ? "ENABLED" : "DISABLED")}{(status.FromCache ? " (from cache)" : "")}.");
+if (status.Mode == LicenceMode.Grace)
+{
+    Console.WriteLine($"Your subscription has ended. Premium features switch off on "
+        + $"{status.LockTime!.Value.ToLocalTime():g} unless you renew.");
+}
+else if (status.Mode == LicenceMode.Locked && status.EffectiveState == LicenceState.Expired)
+{
+    Console.WriteLine("Your subscription has ended and premium features are switched off. Renew it to switch them back on.");
+}
 
 // 5) Check for and apply an update.
 Console.WriteLine();
