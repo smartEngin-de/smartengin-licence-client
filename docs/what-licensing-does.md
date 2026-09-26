@@ -28,6 +28,10 @@ So what actually protects your revenue is not secrecy of the code. It is:
 - A recommended **B + C** policy: no updates without a valid key (B); premium features
   off, free core and data intact (C). No "level D" (plugin dead without a key) — it
   punishes paying customers and is trivially bypassed.
+- A clear rule for lapsed licences (library 0.8.0, server 1.6.43+): an expired
+  **one-off purchase** keeps working, only updates stop; an expired **subscription**
+  keeps its premium features for a few grace days (3 on smartengin.de), then they
+  switch off until it is renewed.
 - **Fail-open** behaviour: if the licence server is unreachable, the plugin keeps
   running on the last known status. A server outage must never take down every
   customer's site at once.
@@ -63,8 +67,13 @@ it). It briefs the assistant to integrate licensing correctly.
 > **Do this:** (1) bundle the library under `lib/smartengin-licence-client/`; (2) create
 > ONE `Self_Client` instance with `server_url`, `slug`, `plugin_file`, `version`, keeping
 > the server URL in a single constant; (3) render `render_panel()` in my admin; (4) gate
-> premium features with an `is_licensed()` helper that reads `get_state()` and treats
-> `active`/`expired` as licensed. Do not add any code-hiding or anti-copy tricks.
+> premium features with an `is_licensed()` helper that returns `$client->is_licensed()`
+> (library 0.8.0: an expired one-off purchase keeps working, an expired subscription
+> switches off after its grace days) — but only if `method_exists( $client,
+> 'is_licensed' )`; otherwise fall back to treating `get_state()['status']`
+> `active`/`expired` as licensed. The fallback is required: when several plugins bundle
+> the library, the first-loaded copy wins, and an older copy has no `is_licensed()`
+> (calling it would be a fatal error). Do not add any code-hiding or anti-copy tricks.
 >
 > **Reference (raw, public):**
 > - Integration guide: `https://raw.githubusercontent.com/smartengin-de/smartengin-licence-client/main/docs/integration-guide.md`
@@ -73,4 +82,4 @@ it). It briefs the assistant to integrate licensing correctly.
 > - Working example plugin: `https://github.com/smartengin-de/smartengin-licence-client/tree/main/example/smartengin-licence-example`
 
 These raw links point at the `main` branch of this repository. Pin them to a release
-tag (e.g. `/v0.5.2/` instead of `/main/`) if you want a fixed version.
+tag (e.g. `/v0.8.0/` instead of `/main/`) if you want a fixed version.

@@ -27,8 +27,20 @@ in, create one object, done — no npm, no build step.
    ```
 
 4. **Show the panel** anywhere in your admin: `$GLOBALS['my_licence']->render_panel();`
-5. **Gate premium features** fail-open on `get_state()['status']` (`active`/`expired` =
-   licensed).
+5. **Gate premium features** with `is_licensed()` (library 0.8.0) — always with a
+   fallback, because when several plugins bundle this library, the copy that loads
+   **first** wins for all of them (no version compare):
+
+   ```php
+   $c = $GLOBALS['my_licence'];
+   $licensed = method_exists( $c, 'is_licensed' )
+       ? $c->is_licensed()
+       : in_array( $c->get_state()['status'], array( 'active', 'expired' ), true );
+   ```
+
+   An expired one-off purchase keeps working (only updates stop); an expired
+   subscription switches off after the grace days the server sends (3 on
+   smartengin.de). A server outage never switches anything off.
 
 That's it. Updates then flow through the normal WordPress update screens automatically.
 

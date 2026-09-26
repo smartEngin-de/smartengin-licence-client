@@ -26,6 +26,12 @@
  *         'version'    => wp_get_theme()->get( 'Version' ),
  *     ) );
  *
+ * Gate premium features with $client->is_licensed() (since 0.8.0). It keeps an
+ * expired ONE-OFF purchase working (only updates stop) and switches an expired
+ * SUBSCRIPTION off after the grace days the server sends (3 on smartengin.de).
+ * Do not read 'status' yourself for that: an 'active' licence whose date has
+ * passed is expired, too.
+ *
  * The library is deliberately generic: it never touches product internals, so
  * the same code serves every smartEngin product (plugin OR theme; and non-WP
  * software via the same REST API). All products should bundle the SAME library
@@ -46,7 +52,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 // must ship the SAME library version; an old copy in any one plugin silently
 // downgrades the library for all of them.
 if ( ! defined( 'SELF_CLIENT_VERSION' ) ) {
-	define( 'SELF_CLIENT_VERSION', '0.7.0' );
+	define( 'SELF_CLIENT_VERSION', '0.8.0' );
 }
 
 if ( ! class_exists( 'Self_Client' ) ) {

@@ -13,7 +13,7 @@ OS automatically; only the packaging of your app differs (see
   new build, set the version. For a desktop app set **Platform = Windows app (.exe /
   .msi)** (used for any single-file desktop binary) or **Other** for a different package.
 - A ready **Python reference client** (`se_licence.py`, standard library only) does
-  activation, fail-open validation and the silent self-update for you.
+  activation, validation, the premium-feature check and the silent self-update for you.
 - It is the exact Python equivalent of the [.NET client](windows-software-guide.md); both
   talk to the same public REST API (`sels/v1`).
 
@@ -39,7 +39,7 @@ To ship an update later: increase **Latest version**, upload the new `.exe`, sav
 
 ## 2. What the client does
 
-Four steps, all against the public `sels/v1` REST API — identical to every other client:
+Five steps, all against the public `sels/v1` REST API — identical to every other client:
 
 1. **Device id** — a stable, anonymous identifier for this installation (sent as
    `instance` with `instance_type=device`). A random GUID stored under
@@ -47,9 +47,12 @@ Four steps, all against the public `sels/v1` REST API — identical to every oth
    data.
 2. **Activate** the licence key once (`POST /activate`), then store the key locally so the
    app never asks again.
-3. **Validate** periodically (`POST /validate`), **fail-open**: on a network error keep
-   the last known status so a server outage never bricks a paying customer.
-4. **Update** (`GET /update`): if a newer version exists, download the package, **verify
+3. **Validate** periodically (`POST /validate`): on a network error keep the last known
+   status, so a server outage never bricks a paying customer.
+4. **Gate premium features** from that stored status (`is_licensed(slug)`): an expired
+   one-off purchase keeps working; an expired subscription switches off after its
+   grace days (server 1.6.43+).
+5. **Update** (`GET /update`): if a newer version exists, download the package, **verify
    its SHA-256**, then replace the running `.exe` and restart.
 
 ---
@@ -66,10 +69,11 @@ PRODUCT_SLUG = "your-product-slug"        # exactly as in the backend
 APP_VERSION  = "1.0.0"                     # bump on every release
 ```
 
-Integration is three touch-points in your entry point:
+Integration is four touch-points in your entry point:
 
 ```python
 import sys
+import time
 import se_licence
 import licence_config
 
@@ -87,30 +91,53 @@ def main():
     updater = se_licence.Updater(options)
     slug = licence_config.PRODUCT_SLUG
 
-    # (2) Gate: locked until the first successful activation.
-    if not se_licence.is_licensed(slug):
+    # (2) Ask for a key until the first successful activation.
+    if not se_licence.has_key(slug):
         key = ask_user_for_key()                 # your UI (window / prompt)
         result = client.activate(key)
         if not result["success"]:
-            show_error(result["message"]); return
+            show_error(result["message"]); return   # e.g. license_expired: the server's own text
         se_licence.save_key(slug, key)           # remember it – never ask again
 
-    # (3) Fail-open validate + silent update (do this in the background).
+    # (3) Validate + silent update (do this in the background).
     key = se_licence.load_key(slug)
-    client.validate(key)                         # refreshes the cached status; never raises
+    status = client.validate(key)                # refreshes the cached status; never raises
+    if status["mode"] == "grace":                # expired subscription, still in its grace days
+        show_error("Please renew — premium switches off on %s."
+                   % time.strftime("%Y-%m-%d", time.localtime(status["lock_time"])))
     info = updater.check_for_update(key)
     if info:
         package = updater.download_and_verify(info)     # raises on checksum mismatch
         updater.apply_update_and_restart(package)       # replaces the .exe and restarts
 
-    start_your_app()
+    # (4) Gate premium features — anywhere, any time, no server call.
+    start_your_app(premium=se_licence.is_licensed(slug))
 
 if __name__ == "__main__":
     main()
 ```
 
-`client.validate(key)` returns a dict; gate premium features on its `features_enabled`
-flag (fail-open — only a confirmed refunded/disabled licence turns them off).
+### When premium features switch off (se_licence 0.2.0)
+
+`se_licence.is_licensed(slug)` is the check (a status dict from `validate` carries the
+same answer as `features_enabled`):
+
+| Licence | `status["mode"]` | premium |
+|---|---|---|
+| Active, or lifetime | `licensed` | on |
+| Expired **one-off purchase** | `licensed` | on — only updates stop |
+| Expired **subscription**, within `grace_days` (3 on smartengin.de) | `grace` | on — `status["lock_time"]` is the switch-off moment (Unix time) |
+| Expired subscription, grace days over | `locked` | **off** |
+| Refunded or disabled | `locked` | **off** |
+| Unknown / server never reached | `licensed` | on |
+
+- Decided from the **cached** status only: on time even offline, never early because
+  of a server outage; a renewal switches premium back on at the next `validate`.
+- A server older than smartEngin Licence & buy 1.6.43 does not send the subscription
+  details — nothing ever locks (as in 0.1.0).
+- **Changed in 0.2.0:** `is_licensed(slug)` used to mean "a key is stored"; that is now
+  `has_key(slug)`. `activate()` now returns the server's refusal (`license_expired`,
+  `limit_reached` …) with its readable `message` instead of `network_error`.
 
 ### Build a single `.exe`
 
@@ -162,7 +189,7 @@ pyinstaller --onefile --name "YourApp" app.py
   SHA-256), or ship a single-file build. macOS Gatekeeper requires notarization for
   downloaded apps, just as Windows wants Authenticode (section 5).
 
-The **licensing** part (activate / validate, fail-open) is identical on every platform;
+The **licensing** part (activate / validate / is_licensed) is identical on every platform;
 only the update *packaging* differs.
 
 ---
@@ -178,8 +205,10 @@ Update:    GET  /update?key=…&product=…&version=…&instance=…&instance_ty
 Download:  GET  <package URL from /update>   → verify sha256 → install
 ```
 
-Store `status` + `valid_until` locally, re-check periodically, and gate features
-**fail-open** on the last known status. See [`rest-reference.md`](rest-reference.md) and
+Store `status`, `valid_until`, `subscription` and `grace_days` locally, re-check
+periodically, and gate features on the last known answer: off for refunded/disabled
+and for a subscription past `valid_until` + `grace_days`, on otherwise — never off
+because the server is unreachable. See [`rest-reference.md`](rest-reference.md) and
 [`openapi.yaml`](openapi.yaml) (machine-readable, for codegen).
 
 ---
@@ -198,7 +227,8 @@ provides the SHA-256; ship a signed binary on top.
 
 Licensing is a **business mechanism, not unbreakable copy protection** — the app runs on
 the customer's machine. Real enforcement is server-side: updates require a valid key, and
-downloads are signed and short-lived. Keep the client **fail-open** so a server outage or
-an expired licence never leaves a paying customer with a dead app (it keeps working; only
-updates pause). Same philosophy as the WordPress and .NET clients —
+downloads are signed and short-lived. The client stays **fail-open**: a server outage or
+an expired one-off purchase never leaves a paying customer with a dead app (only updates
+pause); only an unpaid subscription after its grace days, or a refunded key, switches
+premium off — the free part keeps running. Same philosophy as the WordPress and .NET clients —
 see [`what-licensing-does.md`](what-licensing-does.md).

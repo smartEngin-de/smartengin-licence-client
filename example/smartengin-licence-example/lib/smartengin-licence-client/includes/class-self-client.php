@@ -148,6 +148,8 @@ class Self_Client {
 			'blocked'          => '',    // Server refused THIS site: limit_reached|trial_used_on_site|''
 			'blocked_message'  => '',    // Reason in plain words, as sent by the server.
 			'server_moved_to'  => '',    // Validated "the server moved here" address, or ''.
+			'subscription'     => false, // Sold as a subscription (server >= L&b 1.6.43; older: false).
+			'grace_days'       => 0,     // Days a subscription keeps premium features after its end date.
 		);
 		return wp_parse_args( (array) get_option( $this->option_name, array() ), $defaults );
 	}
@@ -372,6 +374,7 @@ class Self_Client {
 			$state['valid_until']      = isset( $data['valid_until'] ) ? $data['valid_until'] : null;
 			$state['activations_left'] = isset( $data['activations_left'] ) ? $data['activations_left'] : null;
 			$state['valid']            = $this->derive_valid( $state['status'], $state['valid_until'] );
+			$state                     = $this->store_lock_terms( $state, $data );
 			$state['last_check']       = time();
 			$this->set_state( $state );
 			$this->flush_update_cache();
@@ -416,6 +419,8 @@ class Self_Client {
 		$state['activations_left'] = null;
 		$state['blocked']          = '';
 		$state['blocked_message']  = '';
+		$state['subscription']     = false;
+		$state['grace_days']       = 0;
 		$this->set_state( $state );
 		$this->flush_update_cache();
 		return true;
@@ -448,8 +453,108 @@ class Self_Client {
 		$state['valid']            = ! empty( $data['valid'] );
 		$state['valid_until']      = array_key_exists( 'valid_until', $data ) ? $data['valid_until'] : $state['valid_until'];
 		$state['activations_left'] = array_key_exists( 'activations_left', $data ) ? $data['activations_left'] : $state['activations_left'];
+		$state                     = $this->store_lock_terms( $state, $data );
 		$state['last_check']       = time();
 		$this->set_state( $state );
+	}
+
+	/**
+	 * Take over the lock terms from a server answer (0.8.0).
+	 *
+	 * Only when the server sends them: a server older than L&b 1.6.43 knows
+	 * nothing about them, and the stored values then stay as they are (a fresh
+	 * install keeps the defaults: no subscription, i.e. never locked).
+	 *
+	 * @param array $state State.
+	 * @param array $data  Decoded server answer.
+	 * @return array
+	 */
+	private function store_lock_terms( array $state, array $data ) {
+		if ( array_key_exists( 'subscription', $data ) ) {
+			$state['subscription'] = ! empty( $data['subscription'] );
+		}
+		if ( array_key_exists( 'grace_days', $data ) ) {
+			$state['grace_days'] = max( 0, (int) $data['grace_days'] );
+		}
+		return $state;
+	}
+
+	/* ======================================================================
+	 * Entitlement (0.8.0) - gate premium features with is_licensed()
+	 * ==================================================================== */
+
+	/**
+	 * The status as it IS: 'active' whose end date has passed reads 'expired'.
+	 *
+	 * @return string active|expired|refunded|disabled|unknown|''
+	 */
+	public function effective_status() {
+		$state  = $this->get_state();
+		$status = (string) $state['status'];
+		if ( 'active' === $status && ! empty( $state['valid_until'] ) && strtotime( (string) $state['valid_until'] ) <= time() ) {
+			return 'expired';
+		}
+		return $status;
+	}
+
+	/**
+	 * When the premium features of an expired SUBSCRIPTION switch off (Unix
+	 * time), or 0 when they never do (one-off purchase, lifetime, no date).
+	 *
+	 * @return int
+	 */
+	public function lock_time() {
+		$state = $this->get_state();
+		if ( empty( $state['subscription'] ) || empty( $state['valid_until'] ) ) {
+			return 0;
+		}
+		$end = strtotime( (string) $state['valid_until'] );
+		return $end ? $end + max( 0, (int) $state['grace_days'] ) * DAY_IN_SECONDS : 0;
+	}
+
+	/**
+	 * licensed | grace | locked | unlicensed.
+	 *
+	 * - licensed:   valid key, or an expired ONE-OFF purchase (it keeps working,
+	 *               only updates stop - nobody's site breaks over a renewal).
+	 * - grace:      an expired SUBSCRIPTION within its grace days.
+	 * - locked:     an expired subscription past its grace days, or a licence
+	 *               that was refunded / disabled / not recognised.
+	 * - unlicensed: no key, or this site is not activated.
+	 *
+	 * Decided from the STORED state only, never with a server call: the lock
+	 * happens on time even when the server is out of reach, and a server outage
+	 * can never switch a paying customer off early (the date comes from the last
+	 * good answer, and every renewal moves it forward).
+	 *
+	 * @return string
+	 */
+	public function mode() {
+		$state = $this->get_state();
+		if ( '' === (string) $state['key'] || empty( $state['activated'] ) ) {
+			return 'unlicensed';
+		}
+		$status = $this->effective_status();
+		if ( 'active' === $status ) {
+			return 'licensed';
+		}
+		if ( 'expired' !== $status ) {
+			return 'locked';
+		}
+		if ( empty( $state['subscription'] ) ) {
+			return 'licensed';
+		}
+		$lock = $this->lock_time();
+		return ( $lock > 0 && time() < $lock ) ? 'grace' : 'locked';
+	}
+
+	/**
+	 * THE check for premium features. Use this instead of reading 'status'.
+	 *
+	 * @return bool
+	 */
+	public function is_licensed() {
+		return in_array( $this->mode(), array( 'licensed', 'grace' ), true );
 	}
 
 	/* ======================================================================
@@ -835,7 +940,7 @@ class Self_Client {
 	 */
 	public function ajax_activate() {
 		$this->verify_ajax();
-		$key    = isset( $_POST['key'] ) ? sanitize_text_field( wp_unslash( $_POST['key'] ) ) : '';
+		$key    = isset( $_POST['key'] ) ? sanitize_text_field( wp_unslash( $_POST['key'] ) ) : ''; // phpcs:ignore WordPress.Security.NonceVerification.Missing -- verify_ajax() eine Zeile darueber prueft Rechte UND Nonce (check_ajax_referer).
 		$result = $this->activate( $key );
 		if ( is_wp_error( $result ) ) {
 			wp_send_json_error( array( 'message' => $result->get_error_message() ) );
@@ -974,7 +1079,7 @@ class Self_Client {
 			return '<span class="self-status self-status--expired">' . esc_html( $this->blocked_text( $state ) ) . '</span>';
 		}
 
-		switch ( (string) $state['status'] ) {
+		switch ( $this->effective_status() ) {
 			case 'active':
 				if ( empty( $state['valid_until'] ) ) {
 					$txt = __( 'Active — lifetime licence.', 'smartengin-licence-client' );
@@ -988,6 +1093,18 @@ class Self_Client {
 				return '<span class="self-status self-status--active">' . esc_html( $txt ) . '</span>';
 
 			case 'expired':
+				if ( ! empty( $state['subscription'] ) ) {
+					if ( 'grace' === $this->mode() ) {
+						return '<span class="self-status self-status--expired">' . esc_html(
+							sprintf(
+								/* translators: %s: date the premium features switch off */
+								__( 'Expired — the subscription has ended. Premium features stay on until %s, then they switch off. Please renew.', 'smartengin-licence-client' ),
+								date_i18n( get_option( 'date_format' ), $this->lock_time() )
+							)
+						) . '</span>';
+					}
+					return '<span class="self-status self-status--inactive">' . esc_html__( 'Expired — the subscription has ended and premium features are switched off. Renew it to switch them back on.', 'smartengin-licence-client' ) . '</span>';
+				}
 				return '<span class="self-status self-status--expired">' . esc_html__( 'Expired — the plugin keeps working, but updates are paused. Please renew.', 'smartengin-licence-client' ) . '</span>';
 
 			case 'refunded':

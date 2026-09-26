@@ -37,14 +37,17 @@ The server does the rest.
 
 ## 2. What the client does
 
-Four steps, all against the public `sels/v1` REST API:
+Five steps, all against the public `sels/v1` REST API:
 
 1. **Device id** — a stable, anonymous identifier for this installation (sent as
    `instance` with `instance_type=device`). No personal data.
 2. **Activate** the licence key once (`POST /activate`).
-3. **Validate** periodically (`POST /validate`), **fail-open**: on a network error keep
-   the last known status so a server outage never bricks a paying customer.
-4. **Update** (`GET /update`): if a newer version exists for a valid licence, download
+3. **Validate** periodically (`POST /validate`): on a network error keep the last known
+   status, so a server outage never bricks a paying customer.
+4. **Gate premium features** from that stored status (next section): an expired
+   one-off purchase keeps working; an expired subscription switches off after its
+   grace days (server 1.6.43+).
+5. **Update** (`GET /update`): if a newer version exists for a valid licence, download
    the package, **verify its SHA-256**, then replace the running executable and restart.
 
 ---
@@ -70,8 +73,12 @@ var client  = new LicenceClient(options);
 var updater = new Updater(options);
 
 // (3) Activate / validate / update.
-await client.ActivateAsync(key);
-var status = await client.ValidateAsync(key);   // status.FeaturesEnabled gates premium features
+var result = await client.ActivateAsync(key);
+if (!result.Success) ShowMessage(result.Message);  // e.g. "license_expired": the server's own text
+var status = await client.ValidateAsync(key);
+if (status.FeaturesEnabled) EnablePremium();       // THE check — see the table below
+if (status.Mode == LicenceMode.Grace)
+    ShowMessage($"Please renew — premium switches off on {status.LockTime!.Value.ToLocalTime():d}.");
 var update = await updater.CheckForUpdateAsync(key);
 if (update is not null) {
     var package = await updater.DownloadAndVerifyAsync(update);  // throws on checksum mismatch
@@ -81,6 +88,27 @@ if (update is not null) {
 
 Build with the free **.NET 8 SDK** (`dotnet publish -c Release`). End users just run the
 produced `.exe`.
+
+### When premium features switch off (library 0.2.0)
+
+| Licence | `status.Mode` | `status.FeaturesEnabled` |
+|---|---|---|
+| Active, or lifetime | `Licensed` | on |
+| Expired **one-off purchase** | `Licensed` | on — only updates stop |
+| Expired **subscription**, within `GraceDays` (3 on smartengin.de) | `Grace` | on — `status.LockTime` is the switch-off moment (UTC) |
+| Expired subscription, grace days over | `Locked` | **off** |
+| Refunded or disabled | `Locked` | **off** |
+| Unknown / server never reached | `Licensed` | on |
+
+- Decided from the **cached** status, never a live call: the lock happens on time
+  even offline, and a server outage never locks early. A renewal switches premium
+  back on at the next `ValidateAsync`.
+- `status.EffectiveState` reads `Expired` the moment the end date passes.
+- A server older than smartEngin Licence & buy 1.6.43 does not send the subscription
+  details — nothing ever locks (as in library 0.1.0).
+- An expired key cannot be activated on a **new** device (`Error ==
+  "license_expired"`, readable `Message`); a device that already had it stays
+  activated.
 
 ### Why the self-update needs a "helper"
 
@@ -113,8 +141,10 @@ Update:    GET  /update?key=…&product=…&version=…&instance=…&instance_ty
 Download:  GET  <package URL from /update>   → verify sha256 → install
 ```
 
-Store `status` + `valid_until` locally, re-check periodically, and gate features
-**fail-open** on the last known status. See [`rest-reference.md`](rest-reference.md) and
+Store `status`, `valid_until`, `subscription` and `grace_days` locally, re-check
+periodically, and gate features on the last known answer: off for refunded/disabled
+and for a subscription past `valid_until` + `grace_days`, on otherwise — never off
+because the server is unreachable. See [`rest-reference.md`](rest-reference.md) and
 [`openapi.yaml`](openapi.yaml) (machine-readable, for codegen). A **Python** reference
 client using the same swap mechanism ships too — see
 [`python-software-guide.md`](python-software-guide.md).
@@ -136,7 +166,8 @@ ideally, a signed binary.
 
 Licensing is a **business mechanism, not unbreakable copy protection** — the app runs on
 the customer's machine. Real enforcement is server-side: updates require a valid key, and
-downloads are signed and short-lived. Keep the client **fail-open** so a server outage or
-an expired licence never leaves a paying customer with a dead app (it keeps working; only
-updates pause). Same philosophy as the WordPress client —
+downloads are signed and short-lived. The client stays **fail-open**: a server outage or
+an expired one-off purchase never leaves a paying customer with a dead app (only updates
+pause); only an unpaid subscription after its grace days, or a refunded key, switches
+premium off — the free part keeps running. Same philosophy as the WordPress client —
 see [`what-licensing-does.md`](what-licensing-does.md).

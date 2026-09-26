@@ -49,12 +49,19 @@ refreshes it.
   "success": true,
   "status": "active",
   "valid_until": "2027-01-31 23:59:59",
-  "activations_left": 2
+  "activations_left": 2,
+  "subscription": true,
+  "grace_days": 3
 }
 ```
 
-`valid_until` is `null` for a lifetime licence; `activations_left` is `null` when the
-licence allows unlimited activations.
+`valid_until` is in **UTC**, or `null` for a lifetime licence; `activations_left` is
+`null` when the licence allows unlimited activations. `subscription` and
+`grace_days` (server 1.6.43+) are explained under [`/validate`](#post-validate).
+
+An instance that **already** holds an activation can always re-activate (idempotent,
+`200`) — even with an expired key; `status` then says `expired`. Only a **new**
+instance is refused with `license_expired`.
 
 **Errors**
 
@@ -64,6 +71,7 @@ licence allows unlimited activations.
 | 404 | `product_not_found` | Unknown product slug. |
 | 404 | `license_not_found` | Key unknown, or not for this product. |
 | 403 | `license_inactive` | Licence refunded or disabled. |
+| 403 | `license_expired` | Licence past its end date, and this instance does not hold an activation yet (server 1.6.43+). Renew first. |
 | 403 | `trial_used_on_site` | A free trial was already used on this website. |
 | 409 | `limit_reached` | Activation limit reached. |
 | 403 | `https_required` | Called over plain HTTP in production. |
@@ -114,18 +122,32 @@ Re-check a key's current status. Never blocks: an unknown key returns `valid:fal
   "valid": true,
   "status": "active",
   "valid_until": "2027-01-31 23:59:59",
-  "activations_left": 2
+  "activations_left": 2,
+  "subscription": true,
+  "grace_days": 3
 }
 ```
 
 | `status` | Meaning |
 |---|---|
-| `active` | Licence is active. |
-| `expired` | Term ended; software keeps working, updates/support paused. |
-| `refunded` / `disabled` | No longer active. |
-| `unknown` | Key not recognised. |
+| `active` | Licence is active and not past `valid_until`. |
+| `expired` | End date has passed (since server 1.6.43 also when the stored status is still "active"; until 1.6.42 such a licence was reported as `active` with `valid:false`). Updates stop. **One-off purchase:** the software keeps working. **Subscription:** premium features stay on for `grace_days`, then switch off. |
+| `refunded` / `disabled` | No longer active — premium features off. |
+| `unknown` | Key not recognised (no further fields). |
 
-`valid` is `true` only when the licence is **active and not past `valid_until`**.
+`valid` is `true` only when the licence is **active and not past `valid_until`** (UTC).
+
+| Field (server 1.6.43+) | Meaning |
+|---|---|
+| `subscription` | `true` when the licence was sold as a subscription. Instalment plans are one-off purchases (`false`). |
+| `grace_days` | Days after `valid_until` that an expired **subscription** keeps its premium features (3 on smartengin.de). |
+
+The client decides the lock from the **stored** answer, without a live call:
+switch off when `subscription` is `true` and now ≥ `valid_until` + `grace_days`.
+That way the lock happens on time offline, and an outage never locks early. A
+server older than 1.6.43 omits both fields — treat the licence as a one-off
+purchase (never locks). The ready clients (PHP 0.8.0, .NET 0.2.0, Python 0.2.0)
+implement exactly this.
 
 ---
 
@@ -289,6 +311,8 @@ curl -sS -X POST "https://smartengin.de/wp-json/sels/v1/activate" \
   -d "key=XXXX-XXXX-XXXX-XXXX-XXXX"
 ```
 
-Store `status` + `valid_until` locally, re-check periodically via `/validate`, and gate
-your features **fail-open** on the last known status. That is the entire integration in
-any language.
+Store `status`, `valid_until`, `subscription` and `grace_days` locally, re-check
+periodically via `/validate`, and gate your features on the last known answer:
+off for `refunded`/`disabled`, off for an expired subscription after `grace_days`,
+on otherwise — never off because the server is unreachable. That is the entire
+integration in any language.

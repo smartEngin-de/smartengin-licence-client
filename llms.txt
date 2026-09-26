@@ -2,9 +2,13 @@
 
 > Build-free PHP library and REST API to license and auto-update your own WordPress
 > plugin (or any software) through a smartEngin Licence & buy server. A licence key is
-> a random server-stored token; enforcement is server-side; clients gate features
-> fail-open on the last known status. Policy B+C: no updates without a valid key,
-> premium features off but free core and data intact, never "dead without key".
+> a random server-stored token; enforcement is server-side; clients gate features on
+> the last known status, never on a live call (a server outage never switches anything
+> off). Policy B+C: no updates without a valid key, premium features off but free core
+> and data intact, never "dead without key". Lapsed licences (library 0.8.0, server
+> 1.6.43+): an expired one-off purchase keeps working; an expired subscription switches
+> off after `grace_days` (3). PHP: gate with `$client->is_licensed()` guarded by
+> `method_exists()` — the first-loaded copy of the library wins on a site.
 
 ## Docs
 
@@ -12,13 +16,13 @@
 - [REST reference](docs/rest-reference.md): endpoints /activate, /deactivate, /validate, /update, /download with parameters and responses.
 - [OpenAPI spec](docs/openapi.yaml): machine-readable API for codegen and non-WordPress clients.
 - [Windows software guide](docs/windows-software-guide.md): sell and silently auto-update Windows / non-WordPress apps (backend product with Platform=Windows, .NET reference client, single-file self-replace + restart, SHA-256 verify, code signing).
-- [Python software guide](docs/python-software-guide.md): the same for Python desktop apps — dependency-free se_licence.py reference client, PyInstaller --onefile self-replace via --se-apply-update helper, SHA-256 verify, fail-open.
+- [Python software guide](docs/python-software-guide.md): the same for Python desktop apps — dependency-free se_licence.py reference client, PyInstaller --onefile self-replace via --se-apply-update helper, SHA-256 verify, subscription lock after grace days.
 - [What licensing does](docs/what-licensing-does.md): honest scope (GPL reality, server-side enforcement, fail-open) plus a ready "give this to your AI" prompt.
 
 ## Reference clients (non-WordPress)
 
-- [.NET/C# client](clients/dotnet/): SmartEngin.Licence library + sample app — activation, fail-open validation, single-file self-replace + restart. Guide: docs/windows-software-guide.md.
-- [Python client](clients/python/): dependency-free se_licence.py — same recipe, PyInstaller --onefile self-update via --se-apply-update helper. Guide: docs/python-software-guide.md.
+- [.NET/C# client](clients/dotnet/): SmartEngin.Licence 0.2.0 library + sample app — activation, validation, `FeaturesEnabled` (subscription lock after grace days, offline-safe), single-file self-replace + restart. Guide: docs/windows-software-guide.md.
+- [Python client](clients/python/): dependency-free se_licence.py 0.2.0 — same recipe (`is_licensed(slug)`, `has_key(slug)`), PyInstaller --onefile self-update via --se-apply-update helper. Guide: docs/python-software-guide.md.
 
 ## Example
 

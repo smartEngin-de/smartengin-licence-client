@@ -197,20 +197,39 @@ smartEngin products is **B + C**:
 - **B — updates only for valid licences** (handled automatically by the library; no
   valid key ⇒ no update appears + the panel shows the status).
 - **C — premium features off without a valid licence, free core keeps working, data
-  is preserved.** You implement this with one small helper.
+  is preserved.** You implement this with one small helper around the library's
+  `is_licensed()` (library **0.8.0**).
+
+**When `is_licensed()` says yes** (server smartEngin Licence & buy 1.6.43 or newer):
+
+| Licence | `mode()` | `is_licensed()` |
+|---|---|---|
+| Active, or lifetime | `licensed` | `true` |
+| Expired **one-off purchase** | `licensed` | `true` — only updates stop |
+| Expired **subscription**, within the grace days (3 on smartengin.de) | `grace` | `true` — the panel asks to renew and names the switch-off day |
+| Expired subscription, grace days over | `locked` | `false` |
+| Refunded / disabled | `locked` | `false` |
+| No key, or this site not activated | `unlicensed` | `false` |
+
+It decides from the **stored** state only, never with a live call: the lock
+happens on time even when the server is unreachable, and an outage can never
+switch a paying customer off early. A late renewal moves the end date forward at
+the next daily check, and the features come back on their own. A server older
+than 1.6.43 does not send the subscription details; the licence is then treated
+as a one-off purchase and never locks.
 
 ```php
 /**
  * True when this product is licensed enough to run its premium features.
- *
- * FAIL-OPEN by design: it reads only the cached state (get_state()), which keeps the
- * LAST KNOWN status when the server is unreachable. A server outage must never switch
- * off every customer's site at once — that is a far bigger risk than piracy.
  */
 function acme_gallery_is_licensed() {
-	$state = $GLOBALS['acme_gallery_licence']->get_state();
-	// 'expired' still counts as licensed: only updates/support end, the software
-	// keeps working. Adjust to taste, but keep it fail-open.
+	$client = $GLOBALS['acme_gallery_licence'];
+	if ( method_exists( $client, 'is_licensed' ) ) {
+		return $client->is_licensed(); // Library 0.8.0+.
+	}
+	// An older library copy loaded first (see "First copy wins" below):
+	// the previous rule, 'expired' keeps working.
+	$state = $client->get_state();
 	return in_array( (string) $state['status'], array( 'active', 'expired' ), true );
 }
 
@@ -222,16 +241,33 @@ add_action( 'init', function () {
 } );
 ```
 
+Do not read `status` yourself to decide this: an `active` licence whose end date
+has passed is expired, too. `effective_status()` gives you the status as it is
+right now, and `lock_time()` the Unix time an expired subscription switches off
+(0 when it never does).
+
+### First copy wins — always keep the fallback
+
+When several plugins on one site bundle this library, PHP loads **only the first
+copy** (`class_exists()` skips all others, **without comparing versions**). If
+that first copy is older than 0.8.0, `is_licensed()` does not exist, and calling
+it without the `method_exists()` check above is a **fatal error on the
+customer's site**. With the fallback, your plugin keeps working under the old
+rule until every plugin on that site ships 0.8.0. Expect this: your customers
+will run other plugins that bundle the library.
+
 ### `get_state()` fields
 
 | Field | Type | Meaning |
 |---|---|---|
 | `key` | string | The stored licence key (may be empty). |
 | `activated` | bool | Did this site register successfully at least once? |
-| `status` | string | `active` \| `expired` \| `refunded` \| `disabled` \| `unknown` \| `''`. |
+| `status` | string | `active` \| `expired` \| `refunded` \| `disabled` \| `unknown` \| `''`, as the server last sent it. Use `effective_status()` for the status as it is now. |
 | `valid` | bool | Entitled to updates right now (last known). |
 | `valid_until` | string\|null | MySQL datetime, or `null` for a lifetime licence. |
 | `activations_left` | int\|null | Remaining activation slots, or `null` when unlimited. |
+| `subscription` | bool | Sold as a subscription (0.8.0; `false` from a server older than 1.6.43). |
+| `grace_days` | int | Days an expired subscription keeps its premium features (0.8.0; 3 on smartengin.de). |
 | `last_check` | int | Unix time of the last successful server check. |
 | `blocked` | string | `''` normally. Set when the server refuses updates for **this** installation: `limit_reached` or `trial_used_on_site`. |
 | `blocked_message` | string | The server's plain-words reason, ready to show. Empty when `blocked` is empty. |
@@ -245,7 +281,7 @@ reason to *tell* them something, not to switch anything off.
 ### The Fail-Open rule (non-negotiable)
 
 - Never hard-block on "server unreachable". Gate on the **stored status**, not on a
-  live call.
+  live call (`is_licensed()` does exactly that).
 - Never delete or lock user data when a licence lapses. Turn premium *off*, keep the
   free core and the data.
 - Do **not** implement a "level D" (plugin dead without a key). It punishes paying
@@ -341,7 +377,8 @@ fork it or read it side by side with this guide.
 - [ ] One `Self_Client` instance with the 4 config values.
 - [ ] Server URL kept in a **single constant**.
 - [ ] Licence panel rendered in the admin.
-- [ ] Premium features gated via a **fail-open** `is_licensed()` helper (B + C).
+- [ ] Library **0.8.0** bundled; premium features gated via `$client->is_licensed()`
+      **with the `method_exists()` fallback** (B + C).
 - [ ] Activate / deactivate / update tested against the server.
 
 See also: [REST reference](rest-reference.md) · [OpenAPI spec](openapi.yaml) ·

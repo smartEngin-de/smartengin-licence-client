@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       smartEngin Licence Example
  * Description:       Minimal, working reference for licensing a plugin with smartEngin Licence & buy. Fork it or read it next to the integration guide.
- * Version:           1.0.0
+ * Version:           1.1.0
  * Requires at least: 6.4
  * Requires PHP:      7.4
  * Author:            smartEngin
@@ -13,7 +13,7 @@
  * This example shows the WHOLE integration:
  *   1. Load the client library and create ONE Self_Client instance (§4).
  *   2. Render the licence panel in the admin (§5).
- *   3. Gate a premium feature FAIL-OPEN via get_state() — policy B + C (§6).
+ *   3. Gate a premium feature with is_licensed(), with a fallback for older copies (§6).
  *   4. Updates flow automatically through the library's hooks (§7) — nothing to do.
  *
  * @package SmartEnginLicenceExample
@@ -24,7 +24,7 @@ if ( ! defined( 'ABSPATH' ) ) {
 }
 
 define( 'SLE_FILE', __FILE__ );
-define( 'SLE_VERSION', '1.0.0' );
+define( 'SLE_VERSION', '1.1.0' );
 
 /**
  * The ONE place the licence-server address lives. When the server later moves to a
@@ -71,15 +71,25 @@ sle_licence(); // Instantiate on load so all hooks are registered.
 /**
  * 3) Is this site licensed enough to run premium features?
  *
- * FAIL-OPEN by design: reads only the cached state, which keeps the LAST KNOWN status
- * when the server is unreachable. 'expired' still counts as licensed — only updates and
- * support end, the software keeps working (policy C). A server outage must never switch
- * off every customer's site at once.
+ * Ask the library: is_licensed() (client 0.8.0) reads only the cached state, so a
+ * server outage never switches a customer off. An expired ONE-OFF purchase keeps
+ * working (only updates stop); an expired SUBSCRIPTION switches off after the grace
+ * days the server sends (3 on smartengin.de).
+ *
+ * The method_exists() fallback is NOT optional: when several plugins bundle this
+ * library, the copy that loads FIRST wins for all of them (no version compare). If
+ * that is an older copy (< 0.8.0), is_licensed() does not exist and calling it
+ * would be a fatal error on the customer's site.
  *
  * @return bool
  */
 function sle_is_licensed() {
-	$state = sle_licence()->get_state();
+	$client = sle_licence();
+	if ( method_exists( $client, 'is_licensed' ) ) {
+		return $client->is_licensed();
+	}
+	// Older library loaded first: the previous rule ('expired' keeps working).
+	$state = $client->get_state();
 	return in_array( (string) $state['status'], array( 'active', 'expired' ), true );
 }
 
@@ -124,7 +134,11 @@ add_action( 'admin_menu', function () {
  * @return void
  */
 function sle_render_admin_page() {
-	$state    = sle_licence()->get_state();
+	$state = sle_licence()->get_state();
+	// effective_status() (0.8.0) says 'expired' the moment the date has passed.
+	if ( method_exists( sle_licence(), 'effective_status' ) ) {
+		$state['status'] = sle_licence()->effective_status();
+	}
 	$licensed = sle_is_licensed() ? __( 'yes', 'smartengin-licence-example' ) : __( 'no', 'smartengin-licence-example' );
 	?>
 	<div class="wrap">

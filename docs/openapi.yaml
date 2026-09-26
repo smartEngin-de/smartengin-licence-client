@@ -1,7 +1,7 @@
 openapi: 3.1.0
 info:
   title: smartEngin Licence & buy — Licensing API
-  version: "1.0.0"
+  version: "1.1.0"
   description: >
     Developer-facing licensing endpoints of the smartEngin Licence & buy server
     (WordPress REST namespace `sels/v1`). These are the endpoints a licensed product
@@ -23,8 +23,10 @@ info:
 
     A licence key is a random, server-stored token — there is nothing to decrypt
     client-side. Enforcement (activation limits, the update channel, signed downloads)
-    lives only on the server. Clients should gate features fail-open on the last known
-    status.
+    lives only on the server. Clients gate features on the last known answer, never
+    on a live call: off for refunded/disabled, off for an expired subscription once
+    `valid_until` + `grace_days` has passed, on otherwise (an expired one-off purchase
+    keeps working; a server outage never switches anything off).
   license:
     name: GPL-2.0-or-later (library) / example snippets are free to use
     url: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html
@@ -59,7 +61,7 @@ paths:
                 label: { type: string, description: "Optional human label." }
       responses:
         "200":
-          description: Activated (or already active on this instance).
+          description: Activated (or already active on this instance — also with an expired key, then `status` is `expired`).
           content:
             application/json:
               schema: { $ref: "#/components/schemas/ActivationResult" }
@@ -68,11 +70,13 @@ paths:
                 status: active
                 valid_until: "2027-01-31 23:59:59"
                 activations_left: 2
+                subscription: true
+                grace_days: 3
         "400":
           description: "`bad_request` — missing key or instance."
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
         "403":
-          description: "`license_inactive` (refunded/disabled), `trial_used_on_site` (a free trial was already used on this website), or `https_required`."
+          description: "`license_inactive` (refunded/disabled), `license_expired` (past its end date and this instance holds no activation yet — server 1.6.43+), `trial_used_on_site` (a free trial was already used on this website), or `https_required`."
           content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
         "404":
           description: "`product_not_found` (unknown slug) or `license_not_found` (key unknown or not for this product)."
@@ -135,7 +139,10 @@ paths:
               examples:
                 valid:
                   summary: A valid, active licence
-                  value: { valid: true, status: active, valid_until: "2027-01-31 23:59:59", activations_left: 2 }
+                  value: { valid: true, status: active, valid_until: "2027-01-31 23:59:59", activations_left: 2, subscription: true, grace_days: 3 }
+                expired_subscription:
+                  summary: An expired subscription (premium stays on until valid_until + grace_days)
+                  value: { valid: false, status: expired, valid_until: "2026-09-25 10:00:00", activations_left: 2, subscription: true, grace_days: 3 }
                 unknown:
                   summary: Unknown key (still HTTP 200)
                   value: { valid: false, status: unknown }
@@ -271,20 +278,36 @@ components:
       type: object
       properties:
         success: { type: boolean, example: true }
-        status: { type: string, enum: [active, expired, refunded, disabled, unknown] }
+        status: { type: string, enum: [active, expired, refunded, disabled, unknown], description: "Since server 1.6.43 `expired` also when the end date has passed but the stored status is still active." }
         valid_until:
           type: [string, "null"]
-          description: "MySQL datetime, or null for a lifetime licence."
+          description: "MySQL datetime in UTC, or null for a lifetime licence."
         activations_left:
           type: [integer, "null"]
           description: "Remaining slots, or null when unlimited."
+        subscription: { $ref: "#/components/schemas/Subscription" }
+        grace_days: { $ref: "#/components/schemas/GraceDays" }
     ValidationResult:
       type: object
       properties:
         valid: { type: boolean, description: "True only when active AND not past valid_until." }
-        status: { type: string, enum: [active, expired, refunded, disabled, unknown] }
-        valid_until: { type: [string, "null"] }
+        status: { type: string, enum: [active, expired, refunded, disabled, unknown], description: "Since server 1.6.43 `expired` also when the end date has passed but the stored status is still active (until 1.6.42: `active` with valid:false)." }
+        valid_until: { type: [string, "null"], description: "MySQL datetime in UTC, or null for a lifetime licence." }
         activations_left: { type: [integer, "null"] }
+        subscription: { $ref: "#/components/schemas/Subscription" }
+        grace_days: { $ref: "#/components/schemas/GraceDays" }
+    Subscription:
+      type: boolean
+      description: >
+        Server 1.6.43+ (absent on older servers and for an unknown key): true when the
+        licence was sold as a subscription. Instalment plans count as one-off (false).
+        An expired one-off purchase keeps its premium features; an expired subscription
+        loses them once valid_until + grace_days has passed.
+    GraceDays:
+      type: integer
+      minimum: 0
+      example: 3
+      description: "Server 1.6.43+: days after valid_until that an expired subscription keeps its premium features."
     NoUpdate:
       type: object
       properties:
