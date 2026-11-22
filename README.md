@@ -27,6 +27,10 @@ in, create one object, done — no npm, no build step.
    ```
 
 4. **Show the panel** anywhere in your admin: `$GLOBALS['my_licence']->render_panel();`
+   Since library 0.8.3 it includes a **"Check connection"** button that tells your
+   customer (and their host) why activation fails when their server cannot reach the
+   licence server — with a ready-made text for the host. Optional: point it at your own
+   help article with `'help_url' => 'https://…'` in the config.
 5. **Gate premium features** with `is_licensed()` (library 0.8.0) — always with a
    fallback, because when several plugins bundle this library, the copy that loads
    **first** wins for all of them (no version compare):
@@ -53,7 +57,7 @@ That's it. Updates then flow through the normal WordPress update screens automat
 
 | Path | Contents |
 |---|---|
-| `self-client.php`, `includes/` | The client library (`Self_Client`). |
+| `self-client.php`, `includes/`, `languages/` | The client library (`Self_Client`), currently **0.8.3**, with its German translation. |
 | `docs/integration-guide.md` | Full step-by-step integration guide (K2). |
 | `docs/rest-reference.md` | REST endpoints, human-readable (K3). |
 | `docs/openapi.yaml` | Machine-readable API spec (K3) for codegen / other languages. |

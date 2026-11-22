@@ -72,13 +72,18 @@ your-plugin/
 └── lib/
     └── smartengin-licence-client/
         ├── self-client.php
-        └── includes/
-            └── class-self-client.php
+        ├── includes/
+        │   └── class-self-client.php
+        └── languages/            (0.8.1+: German translation of the library's texts)
 ```
 
+Copy the **whole** folder, including `languages/` — without it a German backend shows
+the library's messages in English.
+
 **Bundle the same library version in every product you ship.** The library guards its
-own constant/class names, so if two smartEngin plugins are active the newest loaded
-copy wins without conflict.
+own constant/class names, so if two plugins with this library are active the copy that
+loads **first** wins for all of them — there is no version compare (see
+[First copy wins](#first-copy-wins--always-keep-the-fallback)).
 
 ---
 
@@ -137,6 +142,7 @@ update-integration filters. You do not call the REST API yourself.
 | `text_domain` | no | For the library's own UI strings. |
 | `type` | no | `plugin` (default) or `theme`. See below. |
 | `stylesheet` | theme only | The theme directory slug. Defaults to `get_stylesheet()`. |
+| `help_url` | no | 0.8.2+. Address of **your own** help article for connection problems (http/https only). Shown as a link in the licence panel. Empty (default) = no link. |
 
 ### Selling a theme instead of a plugin
 
@@ -186,6 +192,49 @@ add_action( 'admin_menu', function () {
 
 `render_panel()` is self-contained (inline styles + script, uses `admin-ajax.php`).
 No enqueue, no build step.
+
+### Connection check (library 0.8.3)
+
+The most common support case is not a wrong key but a **blocked connection**: the
+customer's host or firewall does not let their server reach your licence server, and
+activation fails with "The licence server could not be reached". Nobody can see that
+from the outside.
+
+Since 0.8.3 the panel therefore has a section **"Connection to the licence server"**
+with a **"Check connection"** button. It asks, **from the customer's server**, your
+licence server and — for comparison — WordPress.org (one GET each, no licence key, no
+other data) and explains the result in plain words:
+
+| Verdict | Meaning |
+|---|---|
+| `ok` / `ok_wporg_down` | The licence server answers — activating should work. |
+| `refused` | Reached, but the answer was 403/429/503 — usually a protection in front of **your** server. |
+| `licence_unreachable` | The internet works, your licence server does not — a matter for the customer's host. |
+| `no_outbound` | Nothing can be reached — the host blocks outgoing connections. |
+| `wp_blocked` | WordPress itself blocks it (`WP_HTTP_BLOCK_EXTERNAL`). |
+
+When something needs clearing up, the panel shows a ready-made **text for the host**
+(domain, time, target, port, resolved IP, result, comparison) with a **"Copy text"**
+button. The last result is kept for an hour; a second click within 10 seconds shows
+it again instead of testing again.
+
+```php
+// Point the panel at your own help article (optional, 0.8.2+):
+new Self_Client( array(
+	// … server_url, slug, plugin_file, version …
+	'help_url' => 'https://your-site.example/help/licence-connection/',
+) );
+
+// Your product already shows its own connection check? Hide the panel's section:
+$GLOBALS['acme_gallery_licence']->render_panel( array( 'connection_test' => false ) );
+```
+
+Building your **own** licence page instead of `render_panel()`? Use the public pieces:
+`connection_test()`, `last_connection_test()`, `connection_result_html( $result )`
+(the finished result HTML) and the AJAX action `wp_ajax_<slug>_conn_test` (capability
+`manage_options` + nonce `<slug>_license` in the field `nonce`). The colours and the
+copy button of that HTML come from the panel's stylesheet and script, so a page of your
+own needs a few lines of CSS/JS for them.
 
 ---
 
@@ -376,8 +425,9 @@ fork it or read it side by side with this guide.
 - [ ] Library bundled under `lib/smartengin-licence-client/`.
 - [ ] One `Self_Client` instance with the 4 config values.
 - [ ] Server URL kept in a **single constant**.
-- [ ] Licence panel rendered in the admin.
-- [ ] Library **0.8.0** bundled; premium features gated via `$client->is_licensed()`
+- [ ] Licence panel rendered in the admin (with the "Check connection" button, 0.8.3).
+- [ ] Optional: `help_url` set to your own help article.
+- [ ] Library **0.8.3** bundled (whole folder incl. `languages/`); premium features gated via `$client->is_licensed()`
       **with the `method_exists()` fallback** (B + C).
 - [ ] Activate / deactivate / update tested against the server.
 

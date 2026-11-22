@@ -23,6 +23,9 @@ class Self_Client {
 	/** Fixed text domain for the library's own UI strings. */
 	const TD = 'smartengin-licence-client';
 
+	/** Seconds a call to the licence server may take (also named in the error text). */
+	const TIMEOUT = 15;
+
 	/** @var string Licence server base URL (no trailing slash needed). */
 	private $server_url;
 
@@ -59,10 +62,32 @@ class Self_Client {
 	/** @var array|null Per-request memo of the /update result (not persisted). */
 	private $update_memo = null;
 
+	/** @var string Optional help article for connection problems (0.8.2), '' = no link. */
+	private $help_url = '';
+
+	/** @var int Duration of the last call() in milliseconds (0.8.2). */
+	private $last_call_ms = 0;
+
 	/**
-	 * @param array $config server_url, slug, plugin_file, version[, option_name].
+	 * The comparison address for the connection test (0.8.2): the same one
+	 * WordPress itself asks for core updates (wp-includes/update.php,
+	 * wp_version_check(), upgraded to https when the server supports SSL).
+	 */
+	const WPORG_URL = 'https://api.wordpress.org/core/version-check/1.7/';
+
+	/** Seconds in which a repeated click shows the last result instead of testing again. */
+	const TEST_BRAKE = 10;
+
+	/**
+	 * @param array $config server_url, slug, plugin_file, version[, option_name][, help_url].
 	 */
 	public function __construct( array $config ) {
+		// Optional and empty by default (0.8.2): the same library ships inside
+		// products of other vendors, where no link to anybody else may appear.
+		if ( isset( $config['help_url'] ) && preg_match( '#^https?://#i', (string) $config['help_url'] ) ) {
+			$this->help_url = esc_url_raw( (string) $config['help_url'] );
+		}
+
 		$this->server_url = isset( $config['server_url'] ) ? untrailingslashit( (string) $config['server_url'] ) : '';
 		$this->slug       = isset( $config['slug'] ) ? sanitize_key( $config['slug'] ) : '';
 		$this->version    = isset( $config['version'] ) ? (string) $config['version'] : '';
@@ -99,6 +124,7 @@ class Self_Client {
 		// AJAX (backend buttons).
 		add_action( 'wp_ajax_' . $this->slug . '_activate', array( $this, 'ajax_activate' ) );
 		add_action( 'wp_ajax_' . $this->slug . '_deactivate', array( $this, 'ajax_deactivate' ) );
+		add_action( 'wp_ajax_' . $this->slug . '_conn_test', array( $this, 'ajax_connection_test' ) );
 
 		// Tell the customer when the server refuses updates for this website.
 		add_action( 'admin_notices', array( $this, 'blocked_notice' ) );
@@ -150,6 +176,8 @@ class Self_Client {
 			'server_moved_to'  => '',    // Validated "the server moved here" address, or ''.
 			'subscription'     => false, // Sold as a subscription (server >= L&b 1.6.43; older: false).
 			'grace_days'       => 0,     // Days a subscription keeps premium features after its end date.
+			'last_error'       => '',    // Last "server could not be reached" message (0.8.1), '' once a call got through.
+			'last_error_time'  => 0,     // When that happened (Unix time).
 		);
 		return wp_parse_args( (array) get_option( $this->option_name, array() ), $defaults );
 	}
@@ -200,17 +228,19 @@ class Self_Client {
 		);
 
 		$args = array(
-			'timeout'   => 15,
+			'timeout'   => self::TIMEOUT,
 			'sslverify' => true,
 			'headers'   => array( 'Accept' => 'application/json' ),
 		);
 
+		$start = microtime( true );
 		if ( 'GET' === $method ) {
 			$response = wp_remote_get( add_query_arg( array_map( 'rawurlencode', $body ), $url ), $args );
 		} else {
 			$args['body'] = $body;
 			$response     = wp_remote_post( $url, $args );
 		}
+		$this->last_call_ms = (int) round( ( microtime( true ) - $start ) * 1000 );
 
 		if ( is_wp_error( $response ) ) {
 			return $response;
@@ -341,6 +371,460 @@ class Self_Client {
 		return strtotime( $valid_until ) > time();
 	}
 
+	/* ======================================================================
+	 * "Server could not be reached" - say WHY (0.8.1)
+	 * ==================================================================== */
+
+	/**
+	 * Which kind of connection failure a transport WP_Error is.
+	 *
+	 * Decided on the error CODE and the cURL NUMBER, never on translated
+	 * wording: WordPress translates "User has blocked requests through HTTP"
+	 * into the site language, so a text match would silently miss on every
+	 * non-English site. The cURL text itself comes from the Requests library
+	 * ("cURL error 28: ...", wp-includes/Requests/src/Transport/Curl.php) and
+	 * is never translated; the fsockopen fallback throws plain English, too.
+	 *
+	 * @param WP_Error $error Error from wp_remote_post()/wp_remote_get().
+	 * @return string timeout|dns|connect|certificate|blocked|other
+	 */
+	public static function connection_reason( WP_Error $error ) {
+		if ( 'http_request_not_executed' === $error->get_error_code() ) {
+			return 'blocked'; // WP_HTTP_BLOCK_EXTERNAL (class-wp-http.php, block_request()).
+		}
+
+		$text = trim( (string) $error->get_error_message() );
+		$curl = preg_match( '/^cURL error (\d+):/', $text, $m ) ? (int) $m[1] : 0;
+
+		if ( 28 === $curl || 'fsocket timed out' === $text ) {
+			return 'timeout';         // CURLE_OPERATION_TIMEDOUT.
+		}
+		if ( 6 === $curl ) {
+			return 'dns';             // CURLE_COULDNT_RESOLVE_HOST.
+		}
+		if ( 7 === $curl ) {
+			return 'connect';         // CURLE_COULDNT_CONNECT.
+		}
+		// TLS handshake / certificate: 35 SSL_CONNECT_ERROR, 51 PEER_FAILED_VERIFICATION
+		// (older libcurl), 58 SSL_CERTPROBLEM, 59 SSL_CIPHER, 60 SSL_CACERT,
+		// 77 SSL_CACERT_BADFILE, 82 SSL_CRL_BADFILE, 83 SSL_ISSUER_ERROR,
+		// 90 SSL_PINNEDPUBKEYNOTMATCH, 91 SSL_INVALIDCERTSTATUS.
+		if ( in_array( $curl, array( 35, 51, 58, 59, 60, 77, 82, 83, 90, 91 ), true )
+			|| 0 === strpos( $text, 'SSL certificate did not match' ) ) {
+			return 'certificate';
+		}
+		return 'other';
+	}
+
+	/**
+	 * Turn a transport failure into the message the customer sends to support.
+	 *
+	 * Keeps the old first sentence, adds one plain sentence naming the case,
+	 * the address the host has to allow, and the original technical text in
+	 * brackets. Before 0.8.1 the WP_Error from wp_remote_post() was thrown
+	 * away, and "could not be reached" alone never told anybody whether the
+	 * customer's host, her website or the licence server was at fault.
+	 *
+	 * The licence key is cut out of the technical text (it is not in a POST
+	 * URL, but a GET or a plugin's own error could carry it). The message is
+	 * also remembered with its time, so "check now" can show it later.
+	 *
+	 * @param WP_Error $error Transport error.
+	 * @param string   $key   Licence key to keep out of the message.
+	 * @return WP_Error Code 'server_unreachable', data [ 'reason' => ... ].
+	 */
+	private function unreachable( WP_Error $error, $key = '' ) {
+		$reason = self::connection_reason( $error );
+
+		$scheme  = strtolower( (string) wp_parse_url( $this->server_url, PHP_URL_SCHEME ) );
+		$host    = strtolower( (string) wp_parse_url( $this->server_url, PHP_URL_HOST ) );
+		$port    = (int) wp_parse_url( $this->server_url, PHP_URL_PORT );
+		$port    = $port > 0 ? $port : ( 'http' === $scheme ? 80 : 443 );
+		$address = ( '' !== $scheme ? $scheme : 'https' ) . '://' . $host;
+
+		$parts = array( __( 'The licence server could not be reached. Please try again.', 'smartengin-licence-client' ) );
+
+		switch ( $reason ) {
+			case 'timeout':
+				// The MEASURED wait, not TIMEOUT (0.8.2): WordPress hands only the
+				// total limit (15 s) to the Requests library, which keeps its own
+				// connect limit of 10 s (Requests::$default_options
+				// 'connect_timeout'). A blocked connection therefore gives up after
+				// about 10 s — the customer saw "after 10004 ms", while 0.8.1 said 15.
+				$parts[] = sprintf(
+					/* translators: %d: number of seconds the website waited. */
+					__( 'Your website’s server waited %d seconds for an answer and got none. Usually your host or a firewall blocks outgoing connections.', 'smartengin-licence-client' ),
+					max( 1, (int) round( $this->last_call_ms / 1000 ) )
+				);
+				break;
+			case 'dns':
+				$parts[] = __( 'Your website’s server could not look up the address of the licence server (name resolution failed). That is a matter for your host (DNS).', 'smartengin-licence-client' );
+				break;
+			case 'connect':
+				$parts[] = __( 'Your website’s server could not open a connection to the licence server. Usually your host or a firewall blocks outgoing connections.', 'smartengin-licence-client' );
+				break;
+			case 'certificate':
+				$parts[] = __( 'The secure connection failed at the certificate check. Usually the list of trusted certificates on your website’s server is out of date – your host can update it.', 'smartengin-licence-client' );
+				break;
+			case 'blocked':
+				$parts[] = self::blocked_sentence( $host );
+				break;
+		}
+
+		if ( in_array( $reason, array( 'timeout', 'dns', 'connect' ), true ) ) {
+			$parts[] = sprintf(
+				/* translators: 1: address of the licence server, e.g. https://smartengin.de, 2: port number. */
+				__( 'Your host needs to allow outgoing connections to %1$s (port %2$d).', 'smartengin-licence-client' ),
+				$address,
+				$port
+			);
+		} elseif ( 'blocked' !== $reason ) {
+			$parts[] = sprintf(
+				/* translators: 1: address of the licence server, e.g. https://smartengin.de, 2: port number. */
+				__( 'Licence server: %1$s (port %2$d).', 'smartengin-licence-client' ),
+				$address,
+				$port
+			);
+		}
+
+		$detail = trim( preg_replace( '/\s+/', ' ', wp_strip_all_tags( (string) $error->get_error_message() ) ) );
+		$key    = trim( (string) $key );
+		if ( '' !== $key ) {
+			$detail = str_replace( array( $key, rawurlencode( $key ), urlencode( $key ) ), '…', $detail );
+		}
+		if ( mb_strlen( $detail ) > 300 ) {
+			$detail = mb_substr( $detail, 0, 300 ) . '…';
+		}
+		if ( '' !== $detail ) {
+			$parts[] = sprintf(
+				/* translators: %s: the original technical error text, e.g. "cURL error 28: Operation timed out ...". */
+				__( '(Technical detail: %s)', 'smartengin-licence-client' ),
+				$detail
+			);
+		}
+
+		$message = implode( ' ', $parts );
+
+		$state                    = $this->get_state();
+		$state['last_error']      = $message;
+		$state['last_error_time'] = time();
+		$this->set_state( $state );
+
+		return new WP_Error( 'server_unreachable', $message, array( 'reason' => $reason ) );
+	}
+
+	/**
+	 * The last "could not be reached" message, while no call has got through
+	 * since (0.8.1).
+	 *
+	 * @return array|null [ 'message' => string, 'time' => int ] or null.
+	 */
+	public function last_error() {
+		$state = $this->get_state();
+		if ( '' === (string) $state['last_error'] ) {
+			return null;
+		}
+		return array(
+			'message' => (string) $state['last_error'],
+			'time'    => (int) $state['last_error_time'],
+		);
+	}
+
+	/* ======================================================================
+	 * Connection test (0.8.2) — what support used to do by hand
+	 * ==================================================================== */
+
+	/**
+	 * Address of the help article for connection problems, or '' when the
+	 * host product set none.
+	 *
+	 * @return string
+	 */
+	public function help_url() {
+		return $this->help_url;
+	}
+
+	/**
+	 * Test from THIS server whether the licence server and, for comparison,
+	 * WordPress.org can be reached.
+	 *
+	 * "Reached" means any HTTP answer, whatever its status (even 403/404): only
+	 * a transport error (WP_Error) means "not reached". So the test needs no
+	 * route of its own on the licence server, and a firewall page in front of
+	 * it is told apart from a blocked connection.
+	 *
+	 * The licence key is never sent, and nothing goes anywhere but these two
+	 * addresses. A repeated click within TEST_BRAKE seconds returns the last
+	 * result instead of testing again — a first click is never refused (unlike
+	 * a lockout that keeps the customer from even trying).
+	 *
+	 * @return array See probe() for the two parts; plus time, site, verdict.
+	 */
+	public function connection_test() {
+		$last = $this->last_connection_test();
+		if ( $last && ( time() - (int) $last['time'] ) < self::TEST_BRAKE ) {
+			$last['repeated'] = true;
+			return $last;
+		}
+
+		$result = array(
+			'time'     => time(),
+			'site'     => $this->instance(),
+			'licence'  => $this->probe( $this->server_url . '/wp-json/sels/v1/' ),
+			'wporg'    => $this->probe( self::WPORG_URL ),
+			'repeated' => false,
+		);
+		$result['verdict'] = self::connection_verdict( $result );
+
+		set_transient( str_replace( '-', '_', $this->slug ) . '_conn_test', $result, HOUR_IN_SECONDS );
+		return $result;
+	}
+
+	/**
+	 * The last connection test (kept for an hour), or null.
+	 *
+	 * @return array|null
+	 */
+	public function last_connection_test() {
+		$last = get_transient( str_replace( '-', '_', $this->slug ) . '_conn_test' );
+		return ( is_array( $last ) && isset( $last['verdict'], $last['licence'], $last['wporg'] ) ) ? $last : null;
+	}
+
+	/**
+	 * One GET to $url, measured.
+	 *
+	 * @param string $url Address to fetch.
+	 * @return array url, host, port, ips (list, empty = not resolvable),
+	 *               reached, code, reason, detail, ms.
+	 */
+	private function probe( $url ) {
+		$scheme = strtolower( (string) wp_parse_url( $url, PHP_URL_SCHEME ) );
+		$host   = strtolower( (string) wp_parse_url( $url, PHP_URL_HOST ) );
+		$port   = (int) wp_parse_url( $url, PHP_URL_PORT );
+		$port   = $port > 0 ? $port : ( 'http' === $scheme ? 80 : 443 );
+
+		// The address THIS server resolves the name to (PHP's own resolver,
+		// IPv4). Shows DNS trouble at once, and whether the request even goes
+		// to the right machine.
+		$ips = ( '' !== $host ) ? gethostbynamel( $host ) : false;
+		$ips = is_array( $ips ) ? array_values( array_unique( $ips ) ) : array();
+
+		$start    = microtime( true );
+		$response = wp_remote_get(
+			$url,
+			array(
+				'timeout'             => self::TIMEOUT,
+				'redirection'         => 0,    // Any answer counts — no need to follow.
+				'limit_response_size' => 16384,
+				'sslverify'           => true,
+				'headers'             => array( 'Accept' => 'application/json' ),
+			)
+		);
+		$ms = (int) round( ( microtime( true ) - $start ) * 1000 );
+
+		$out = array(
+			'url'     => ( '' !== $scheme ? $scheme : 'https' ) . '://' . $host,
+			'host'    => $host,
+			'port'    => $port,
+			'ips'     => $ips,
+			'reached' => false,
+			'code'    => 0,
+			'reason'  => '',
+			'detail'  => '',
+			'ms'      => $ms,
+		);
+
+		if ( is_wp_error( $response ) ) {
+			$out['reason'] = self::connection_reason( $response );
+			$detail        = trim( preg_replace( '/\s+/', ' ', wp_strip_all_tags( (string) $response->get_error_message() ) ) );
+			$out['detail'] = ( mb_strlen( $detail ) > 300 ) ? mb_substr( $detail, 0, 300 ) . '…' : $detail;
+			return $out;
+		}
+
+		$out['reached'] = true;
+		$out['code']    = (int) wp_remote_retrieve_response_code( $response );
+		return $out;
+	}
+
+	/**
+	 * In one word: what does the test mean?
+	 *
+	 * @param array $r Result of connection_test().
+	 * @return string ok | ok_wporg_down | refused | licence_unreachable | no_outbound | wp_blocked
+	 */
+	public static function connection_verdict( array $r ) {
+		$lic = $r['licence'];
+		$org = $r['wporg'];
+
+		if ( ! $lic['reached'] && 'blocked' === $lic['reason'] ) {
+			return 'wp_blocked';
+		}
+		if ( $lic['reached'] && in_array( (int) $lic['code'], array( 403, 429, 503 ), true ) ) {
+			return 'refused';
+		}
+		if ( $lic['reached'] ) {
+			return $org['reached'] ? 'ok' : 'ok_wporg_down';
+		}
+		return $org['reached'] ? 'licence_unreachable' : 'no_outbound';
+	}
+
+	/**
+	 * Short plain words for a connection_reason() value.
+	 *
+	 * @param string $reason timeout|dns|connect|certificate|blocked|other.
+	 * @return string
+	 */
+	public static function reason_label( $reason ) {
+		switch ( $reason ) {
+			case 'timeout':
+				return __( 'no answer in time (time-out)', 'smartengin-licence-client' );
+			case 'dns':
+				return __( 'the name could not be resolved (DNS)', 'smartengin-licence-client' );
+			case 'connect':
+				return __( 'no connection could be opened', 'smartengin-licence-client' );
+			case 'certificate':
+				return __( 'the certificate check failed', 'smartengin-licence-client' );
+			case 'blocked':
+				return __( 'blocked by WordPress itself', 'smartengin-licence-client' );
+		}
+		return __( 'another error', 'smartengin-licence-client' );
+	}
+
+	/**
+	 * The verdict as a sentence for the customer.
+	 *
+	 * @param array $r Result of connection_test().
+	 * @return string
+	 */
+	public static function connection_message( array $r ) {
+		$lic = $r['licence'];
+		switch ( $r['verdict'] ) {
+			case 'ok':
+				return __( 'The connection works. Please activate your licence again now.', 'smartengin-licence-client' );
+			case 'ok_wporg_down':
+				return __( 'The licence server can be reached, so activating should work now. WordPress.org could not be reached from your server — that does not affect your licence, but it may affect updates of WordPress itself.', 'smartengin-licence-client' );
+			case 'refused':
+				return sprintf(
+					/* translators: 1: licence server address, 2: HTTP status code. */
+					__( 'Your server reached %1$s, but the answer was a refusal (HTTP status %2$d). It may come from the licence server itself or from a protection in front of it — this is usually not caused by your host. Please send the text below to the support of this plugin.', 'smartengin-licence-client' ),
+					$lic['url'],
+					(int) $lic['code']
+				);
+			case 'licence_unreachable':
+				return sprintf(
+					/* translators: %s: licence server address. */
+					__( 'Your server can reach the internet, but not %s. That is not caused by your key and not by your website. Please send the text below to your host.', 'smartengin-licence-client' ),
+					$lic['url']
+				);
+			case 'no_outbound':
+				return __( 'Your server does not seem to be allowed to open any connections to the outside. Please send the text below to your host.', 'smartengin-licence-client' );
+			case 'wp_blocked':
+				return self::blocked_sentence( $lic['host'] );
+		}
+		return '';
+	}
+
+	/**
+	 * The ready-made text for the host, with the measured values.
+	 *
+	 * No licence key and no customer data: only the website's domain, the time,
+	 * the two addresses and what happened.
+	 *
+	 * @param array $r Result of connection_test().
+	 * @return string Plain text with line breaks.
+	 */
+	public static function connection_host_text( array $r ) {
+		$lic   = $r['licence'];
+		$org   = $r['wporg'];
+		$nicht = __( 'could not be resolved', 'smartengin-licence-client' );
+
+		$ergebnis = function ( array $p ) {
+			if ( $p['reached'] ) {
+				return sprintf(
+					/* translators: 1: HTTP status code, 2: duration in milliseconds. */
+					__( 'reached (HTTP status %1$d, %2$d ms)', 'smartengin-licence-client' ),
+					(int) $p['code'],
+					(int) $p['ms']
+				);
+			}
+			return sprintf(
+				/* translators: 1: short reason, e.g. "no answer in time (time-out)", 2: duration in milliseconds. */
+				__( 'NOT reached: %1$s (after %2$d ms)', 'smartengin-licence-client' ),
+				self::reason_label( $p['reason'] ),
+				(int) $p['ms']
+			);
+		};
+
+		$zeilen   = array();
+		$zeilen[] = sprintf(
+			/* translators: 1: domain of the website, 2: date and time of the test. */
+			__( 'Connection test from the website %1$s on %2$s.', 'smartengin-licence-client' ),
+			$r['site'],
+			wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ) . ' T', (int) $r['time'] )
+		);
+		$zeilen[] = __( 'A plugin on this website cannot reach its licence server.', 'smartengin-licence-client' );
+		$zeilen[] = '';
+		$zeilen[] = sprintf(
+			/* translators: 1: address, 2: port number. */
+			__( 'Target: %1$s (port %2$d)', 'smartengin-licence-client' ),
+			$lic['url'],
+			(int) $lic['port']
+		);
+		$zeilen[] = sprintf(
+			/* translators: %s: IP addresses, or "could not be resolved". */
+			__( 'IP address resolved by this server: %s', 'smartengin-licence-client' ),
+			$lic['ips'] ? implode( ', ', $lic['ips'] ) : $nicht
+		);
+		$zeilen[] = sprintf(
+			/* translators: %s: result, e.g. "NOT reached: no answer in time (time-out) (after 10004 ms)". */
+			__( 'Result: %s', 'smartengin-licence-client' ),
+			$ergebnis( $lic )
+		);
+		if ( '' !== $lic['detail'] ) {
+			$zeilen[] = sprintf(
+				/* translators: %s: the original technical error text. */
+				__( 'Technical detail: %s', 'smartengin-licence-client' ),
+				$lic['detail']
+			);
+		}
+		$zeilen[] = '';
+		$zeilen[] = sprintf(
+			/* translators: 1: address, 2: result, e.g. "reached (HTTP status 200, 120 ms)". */
+			__( 'For comparison, %1$s: %2$s', 'smartengin-licence-client' ),
+			$org['url'],
+			$ergebnis( $org )
+		);
+		$zeilen[] = '';
+		$zeilen[] = sprintf(
+			/* translators: %s: address of the licence server. */
+			__( 'Please check whether outgoing connections from this web space to %s are blocked or routed wrongly.', 'smartengin-licence-client' ),
+			$lic['url']
+		);
+		$zeilen[] = __( 'Please also tell me the outgoing IP address of this web space (the address its requests leave from — not the address of the website itself).', 'smartengin-licence-client' );
+		$zeilen[] = sprintf(
+			/* translators: %s: host name of the licence server. */
+			__( 'And please send me the result of a traceroute from this web space to %s.', 'smartengin-licence-client' ),
+			$lic['host']
+		);
+
+		return implode( "\n", $zeilen );
+	}
+
+	/**
+	 * The sentence for "WordPress blocks the request itself" (shared by the
+	 * activation message and the connection test).
+	 *
+	 * @param string $host Host name of the licence server.
+	 * @return string
+	 */
+	private static function blocked_sentence( $host ) {
+		return sprintf(
+			/* translators: %s: host name of the licence server, e.g. smartengin.de. */
+			__( 'WordPress on your website blocked the request itself – through the setting WP_HTTP_BLOCK_EXTERNAL in wp-config.php or through a plugin. To allow it, add %s to WP_ACCESSIBLE_HOSTS.', 'smartengin-licence-client' ),
+			$host
+		);
+	}
+
 	/**
 	 * Activate this site with the given key.
 	 *
@@ -355,12 +839,16 @@ class Self_Client {
 
 		$res = $this->call( 'activate', array( 'key' => $key ) );
 		if ( is_wp_error( $res ) ) {
-			return new WP_Error( 'server_unreachable', __( 'The licence server could not be reached. Please try again.', 'smartengin-licence-client' ) );
+			return $this->unreachable( $res, $key );
 		}
 
 		$data  = $res['data'];
 		$state = $this->get_state();
 		$state['key'] = $key;
+
+		// The call got through, so an earlier connection problem is over.
+		$state['last_error']      = '';
+		$state['last_error_time'] = 0;
 
 		// The server has just re-judged this website, so any earlier block is
 		// stale either way – it is re-established on the next update check if
@@ -387,7 +875,19 @@ class Self_Client {
 		$this->set_state( $state );
 
 		$slug = isset( $data['error'] ) ? (string) $data['error'] : 'error';
-		$msg  = isset( $data['message'] ) ? (string) $data['message'] : __( 'Activation failed.', 'smartengin-licence-client' );
+		if ( isset( $data['message'] ) && '' !== (string) $data['message'] ) {
+			$msg = (string) $data['message'];
+		} elseif ( 200 !== (int) $res['code'] ) {
+			// No answer from the licence server itself (e.g. a firewall in
+			// front of it): the status code is the only clue support gets.
+			$msg = sprintf(
+				/* translators: %d: HTTP status code, e.g. 403 or 503. */
+				__( 'Activation failed. (The licence server answered with HTTP status %d.)', 'smartengin-licence-client' ),
+				(int) $res['code']
+			);
+		} else {
+			$msg = __( 'Activation failed.', 'smartengin-licence-client' );
+		}
 		return new WP_Error( $slug, $msg );
 	}
 
@@ -403,7 +903,7 @@ class Self_Client {
 		if ( '' !== $key ) {
 			$res = $this->call( 'deactivate', array( 'key' => $key ) );
 			if ( is_wp_error( $res ) ) {
-				return new WP_Error( 'server_unreachable', __( 'The licence server could not be reached. Please try again.', 'smartengin-licence-client' ) );
+				return $this->unreachable( $res, $key );
 			}
 		}
 
@@ -421,6 +921,8 @@ class Self_Client {
 		$state['blocked_message']  = '';
 		$state['subscription']     = false;
 		$state['grace_days']       = 0;
+		$state['last_error']       = '';
+		$state['last_error_time']  = 0;
 		$this->set_state( $state );
 		$this->flush_update_cache();
 		return true;
@@ -440,13 +942,22 @@ class Self_Client {
 		}
 
 		$res = $this->call( 'validate', array( 'key' => $key ) );
-		if ( is_wp_error( $res ) || 200 !== $res['code'] ) {
+		if ( is_wp_error( $res ) ) {
+			// Keep last known good state - only remember WHY, so a manual
+			// "check now" can show it (0.8.1).
+			$this->unreachable( $res, $key );
+			return;
+		}
+		if ( 200 !== $res['code'] ) {
 			return; // Keep last known good state.
 		}
 
 		// Re-read: call() itself may have stored a relocation address, which a
 		// write based on the copy from before the call would silently undo.
 		$state = $this->get_state();
+
+		$state['last_error']      = '';
+		$state['last_error_time'] = 0;
 
 		$data = $res['data'];
 		$state['status']           = isset( $data['status'] ) ? (string) $data['status'] : $state['status'];
@@ -962,6 +1473,116 @@ class Self_Client {
 		wp_send_json_success( array( 'html' => $this->status_html() ) );
 	}
 
+	/**
+	 * AJAX: connection test (0.8.3). Answers with the finished result HTML.
+	 *
+	 * @return void
+	 */
+	public function ajax_connection_test() {
+		$this->verify_ajax();
+		wp_send_json_success( array( 'html' => $this->connection_result_html( $this->connection_test(), false ) ) );
+	}
+
+	/**
+	 * The result of a connection test as HTML (0.8.3): verdict, a small table,
+	 * and — only when something needs clearing up — the text for the host with
+	 * a copy button, plus the help link when the host product set one.
+	 *
+	 * Public so that a product with its own licence page can show the very same
+	 * result. Colours and the copy button need the panel stylesheet and script,
+	 * which render_panel() prints.
+	 *
+	 * @param array $r         Result of connection_test() or last_connection_test().
+	 * @param bool  $with_help Show the help link (render_panel() has its own).
+	 * @return string
+	 */
+	public function connection_result_html( array $r, $with_help = true ) {
+		if ( ! isset( $r['verdict'], $r['licence'], $r['wporg'] ) ) {
+			return '';
+		}
+		$verdict = (string) $r['verdict'];
+		$ok      = in_array( $verdict, array( 'ok', 'ok_wporg_down' ), true );
+		$tone    = $ok ? 'active' : ( 'refused' === $verdict ? 'expired' : 'inactive' );
+
+		$html = '<p class="description">' . esc_html(
+			sprintf(
+				/* translators: %s: date and time of the last check. */
+				__( 'Last check: %s', 'smartengin-licence-client' ),
+				wp_date( get_option( 'date_format' ) . ' ' . get_option( 'time_format' ), (int) $r['time'] )
+			)
+		) . '</p>';
+
+		if ( ! empty( $r['repeated'] ) ) {
+			$html .= '<p class="description">' . esc_html__( 'You clicked again within a few seconds, so this is the result of the last check.', 'smartengin-licence-client' ) . '</p>';
+		}
+
+		$html .= '<p class="self-verdict self-verdict--' . esc_attr( $tone ) . '">' . esc_html( self::connection_message( $r ) ) . '</p>';
+
+		$html .= '<table class="widefat striped self-conn-table"><thead><tr>'
+			. '<th>' . esc_html__( 'Target', 'smartengin-licence-client' ) . '</th>'
+			. '<th>' . esc_html__( 'IP address', 'smartengin-licence-client' ) . '</th>'
+			. '<th>' . esc_html__( 'Result', 'smartengin-licence-client' ) . '</th>'
+			. '<th>' . esc_html__( 'Duration', 'smartengin-licence-client' ) . '</th>'
+			. '</tr></thead><tbody>';
+
+		$targets = array(
+			'licence' => __( 'Licence server', 'smartengin-licence-client' ),
+			'wporg'   => __( 'WordPress.org (for comparison)', 'smartengin-licence-client' ),
+		);
+		foreach ( $targets as $part => $name ) {
+			$p = $r[ $part ];
+			if ( $p['reached'] ) {
+				$cell_tone = ( 'licence' === $part && 'refused' === $verdict ) ? 'expired' : 'active';
+				$cell      = '<span class="self-status self-status--' . $cell_tone . '">' . esc_html(
+					sprintf(
+						/* translators: %d: HTTP status code. */
+						__( 'reached (HTTP %d)', 'smartengin-licence-client' ),
+						(int) $p['code']
+					)
+				) . '</span>';
+			} else {
+				$cell = '<span class="self-status self-status--inactive">' . esc_html__( 'not reached', 'smartengin-licence-client' ) . '</span> '
+					. '<span class="description">' . esc_html( self::reason_label( $p['reason'] ) ) . '</span>';
+			}
+			$html .= '<tr><td><strong>' . esc_html( $name ) . '</strong><br><code>' . esc_html( $p['url'] ) . '</code> · '
+				. esc_html(
+					sprintf(
+						/* translators: %d: port number. */
+						__( 'port %d', 'smartengin-licence-client' ),
+						(int) $p['port']
+					)
+				) . '</td>'
+				. '<td>' . ( $p['ips'] ? esc_html( implode( ', ', $p['ips'] ) ) : esc_html__( 'could not be resolved', 'smartengin-licence-client' ) ) . '</td>'
+				. '<td>' . $cell . '</td>'
+				. '<td>' . esc_html(
+					sprintf(
+						/* translators: %d: duration in milliseconds. */
+						__( '%d ms', 'smartengin-licence-client' ),
+						(int) $p['ms']
+					)
+				) . '</td></tr>';
+		}
+		$html .= '</tbody></table>';
+
+		// The text for the host — only when there is something to clear up.
+		// A read-only field (works even if the browser refuses to copy) plus a
+		// copy button for convenience.
+		if ( ! $ok ) {
+			$html .= '<h3>' . esc_html__( 'Text for your host', 'smartengin-licence-client' ) . '</h3>';
+			$html .= '<p>' . esc_html__( 'Send this text to your host’s support. It contains the measured values, and no licence key.', 'smartengin-licence-client' ) . '</p>';
+			$html .= '<p><textarea class="large-text code self-host-text" rows="14" readonly aria-label="' . esc_attr__( 'Text for your host', 'smartengin-licence-client' ) . '">'
+				. esc_textarea( self::connection_host_text( $r ) ) . '</textarea></p>';
+			$html .= '<p><button type="button" class="button self-copy" data-self-copied="' . esc_attr__( 'Copied', 'smartengin-licence-client' ) . '">'
+				. esc_html__( 'Copy text', 'smartengin-licence-client' ) . '</button></p>';
+		}
+
+		if ( $with_help && '' !== $this->help_url ) {
+			$html .= '<p class="self-help"><a href="' . esc_url( $this->help_url ) . '" target="_blank" rel="noopener">' . esc_html__( 'Help with connection problems', 'smartengin-licence-client' ) . '</a></p>';
+		}
+
+		return $html;
+	}
+
 	/* ======================================================================
 	 * Backend panel (host plugin renders this wherever it wants)
 	 * ==================================================================== */
@@ -985,6 +1606,13 @@ class Self_Client {
 			.self-license-panel .self-status--active   { background:#e6f4ea; color:#137333; }
 			.self-license-panel .self-status--expired  { background:#fef7e0; color:#8a5a00; }
 			.self-license-panel .self-status--inactive { background:#fce8e6; color:#b3261e; }
+			.self-license-panel .self-conn { margin-top:24px; padding-top:8px; border-top:1px solid #dcdcde; }
+			.self-license-panel .self-verdict { padding:10px 14px; border-left:4px solid; border-radius:2px; max-width:900px; }
+			.self-license-panel .self-verdict--active   { background:#e6f4ea; border-color:#137333; color:#0d5226; }
+			.self-license-panel .self-verdict--expired  { background:#fef7e0; border-color:#b06f00; color:#6b4500; }
+			.self-license-panel .self-verdict--inactive { background:#fce8e6; border-color:#b3261e; color:#8c1d18; }
+			.self-license-panel .self-conn-table { max-width:900px; margin:8px 0 12px; }
+			.self-license-panel .self-host-text { max-width:900px; font-size:12px; }
 		</style>
 		<?php
 	}
@@ -1123,13 +1751,17 @@ class Self_Client {
 	 * Render the licence panel (key field + activate/deactivate + status).
 	 * Call this from anywhere in the host plugin's admin UI.
 	 *
-	 * @param array $args Optional: 'title'.
+	 * @param array $args Optional: 'title'; 'connection_test' => false hides the
+	 *                    "Check connection" section (0.8.3, default true) for a
+	 *                    product that shows the test on its own page.
 	 * @return void Echoes markup.
 	 */
 	public function render_panel( array $args = array() ) {
 		$state     = $this->get_state();
 		$activated = ! empty( $state['activated'] );
 		$title     = isset( $args['title'] ) ? (string) $args['title'] : __( 'Licence', 'smartengin-licence-client' );
+		$conn      = ! isset( $args['connection_test'] ) || false !== $args['connection_test'];
+		$last_test = $conn ? $this->last_connection_test() : null;
 		$nonce     = wp_create_nonce( $this->slug . '_license' );
 		$this->print_panel_styles();
 		?>
@@ -1152,6 +1784,21 @@ class Self_Client {
 				<span class="spinner self-spinner" style="float:none;"></span>
 			</p>
 			<p class="self-error" style="color:#b32d2e;margin:0;"></p>
+			<?php if ( $conn ) : ?>
+				<div class="self-conn">
+					<h3><?php esc_html_e( 'Connection to the licence server', 'smartengin-licence-client' ); ?></h3>
+					<p><?php esc_html_e( 'If activating does not work, this check finds out where the connection breaks. It asks the licence server and, for comparison, WordPress.org — from the server your website runs on. Your licence key is not sent.', 'smartengin-licence-client' ); ?></p>
+					<p>
+						<button type="button" class="button self-conn-test"><?php esc_html_e( 'Check connection', 'smartengin-licence-client' ); ?></button>
+						<span class="spinner self-conn-spinner" style="float:none;"></span>
+					</p>
+					<p class="self-conn-error" style="color:#b32d2e;margin:0;"></p>
+					<div class="self-conn-result"><?php echo $last_test ? wp_kses_post( $this->connection_result_html( $last_test, false ) ) : ''; ?></div>
+				</div>
+			<?php endif; ?>
+			<?php if ( '' !== $this->help_url ) : ?>
+				<p class="self-help"><a href="<?php echo esc_url( $this->help_url ); ?>" target="_blank" rel="noopener"><?php esc_html_e( 'Help with connection problems', 'smartengin-licence-client' ); ?></a></p>
+			<?php endif; ?>
 		</div>
 		<script>
 		( function () {
@@ -1200,6 +1847,54 @@ class Self_Client {
 					actBtn.style.display = '';
 					keyEl.disabled = false;
 				} );
+			} );
+
+			// Connection test (0.8.3).
+			var connBtn  = root.querySelector( '.self-conn-test' );
+			var connRes  = root.querySelector( '.self-conn-result' );
+			var connErr  = root.querySelector( '.self-conn-error' );
+			var connSpin = root.querySelector( '.self-conn-spinner' );
+			if ( connBtn ) {
+				connBtn.addEventListener( 'click', function () {
+					connErr.textContent = '';
+					connBtn.disabled = true;
+					connSpin.classList.add( 'is-active' );
+					var body = new URLSearchParams();
+					body.append( 'action', slug + '_conn_test' );
+					body.append( 'nonce', nonce );
+					fetch( ajaxurl, { method: 'POST', credentials: 'same-origin', headers: { 'Content-Type': 'application/x-www-form-urlencoded' }, body: body.toString() } )
+						.then( function ( r ) { return r.json(); } )
+						.then( function ( res ) {
+							connSpin.classList.remove( 'is-active' );
+							connBtn.disabled = false;
+							if ( res && res.success ) { connRes.innerHTML = res.data.html; }
+							else { connErr.textContent = ( res && res.data && res.data.message ) ? res.data.message : 'Error.'; }
+						} )
+						.catch( function () { connSpin.classList.remove( 'is-active' ); connBtn.disabled = false; connErr.textContent = 'Error.'; } );
+				} );
+			}
+
+			// "Copy text": clipboard API, else select the field + execCommand.
+			root.addEventListener( 'click', function ( e ) {
+				var btn = e.target.closest ? e.target.closest( '.self-copy' ) : null;
+				if ( ! btn ) { return; }
+				var field = root.querySelector( '.self-host-text' );
+				if ( ! field ) { return; }
+				var label = btn.textContent;
+				function copied() {
+					btn.textContent = btn.getAttribute( 'data-self-copied' ) || label;
+					setTimeout( function () { btn.textContent = label; }, 2000 );
+				}
+				function fallback() {
+					field.focus();
+					field.select();
+					try { if ( document.execCommand( 'copy' ) ) { copied(); } } catch ( err ) {}
+				}
+				if ( navigator.clipboard && window.isSecureContext ) {
+					navigator.clipboard.writeText( field.value ).then( copied, fallback );
+				} else {
+					fallback();
+				}
 			} );
 		} )();
 		</script>

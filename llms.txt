@@ -8,7 +8,10 @@
 > and data intact, never "dead without key". Lapsed licences (library 0.8.0, server
 > 1.6.43+): an expired one-off purchase keeps working; an expired subscription switches
 > off after `grace_days` (3). PHP: gate with `$client->is_licensed()` guarded by
-> `method_exists()` — the first-loaded copy of the library wins on a site.
+> `method_exists()` — the first-loaded copy of the library wins on a site. Library 0.8.3:
+> render_panel() has a "Check connection" button (tests licence server + WordPress.org
+> from the customer's server, no key sent, ready-made text for the host); optional
+> config `help_url`; `render_panel( array( 'connection_test' => false ) )` hides it.
 
 ## Docs
 
@@ -30,4 +33,4 @@
 
 ## Library
 
-- [Loader](self-client.php) and [class](includes/class-self-client.php): the Self_Client library itself.
+- [Loader](self-client.php) and [class](includes/class-self-client.php): the Self_Client library itself (0.8.3); [languages/](languages/) holds its German translation.

@@ -1,0 +1,376 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: \n"
+"Report-Msgid-Bugs-To: \n"
+"Last-Translator: \n"
+"Language-Team: \n"
+"MIME-Version: 1.0\n"
+"Content-Type: text/plain; charset=UTF-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"POT-Creation-Date: 2026-11-21T20:16:10+00:00\n"
+"PO-Revision-Date: 2026-11-22 12:00+0100\n"
+"Language: de_DE\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"X-Generator: WP-CLI 2.12.0\n"
+"X-Domain: smartengin-licence-client\n"
+
+#: includes/class-self-client.php:445
+msgid "The licence server could not be reached. Please try again."
+msgstr "Der Lizenzserver war nicht erreichbar. Bitte versuche es noch einmal."
+
+#. translators: %d: number of seconds the website waited.
+#: includes/class-self-client.php:456
+#, php-format
+msgid "Your website’s server waited %d seconds for an answer and got none. Usually your host or a firewall blocks outgoing connections."
+msgstr "Der Server deiner Website hat %d Sekunden auf eine Antwort gewartet und keine bekommen. Meist sperrt der Hoster oder eine Firewall ausgehende Verbindungen."
+
+#: includes/class-self-client.php:461
+msgid "Your website’s server could not look up the address of the licence server (name resolution failed). That is a matter for your host (DNS)."
+msgstr "Der Server deiner Website konnte die Adresse des Lizenzservers nicht auflösen (Namensauflösung fehlgeschlagen). Das ist Sache deines Hosters (DNS)."
+
+#: includes/class-self-client.php:464
+msgid "Your website’s server could not open a connection to the licence server. Usually your host or a firewall blocks outgoing connections."
+msgstr "Der Server deiner Website konnte keine Verbindung zum Lizenzserver aufbauen. Meist sperrt der Hoster oder eine Firewall ausgehende Verbindungen."
+
+#: includes/class-self-client.php:467
+msgid "The secure connection failed at the certificate check. Usually the list of trusted certificates on your website’s server is out of date – your host can update it."
+msgstr "Die sichere Verbindung ist an der Zertifikatsprüfung gescheitert. Meist ist die Liste vertrauenswürdiger Zertifikate auf dem Server deiner Website veraltet – dein Hoster kann sie aktualisieren."
+
+#. translators: %s: host name of the licence server, e.g. smartengin.de.
+#: includes/class-self-client.php:823
+#, php-format
+msgid "WordPress on your website blocked the request itself – through the setting WP_HTTP_BLOCK_EXTERNAL in wp-config.php or through a plugin. To allow it, add %s to WP_ACCESSIBLE_HOSTS."
+msgstr "WordPress auf deiner Website hat die Anfrage selbst gesperrt – über die Einstellung WP_HTTP_BLOCK_EXTERNAL in der wp-config.php oder über ein Plugin. Zum Freigeben %s in WP_ACCESSIBLE_HOSTS eintragen."
+
+#. translators: 1: address of the licence server, e.g. https://smartengin.de, 2: port number.
+#: includes/class-self-client.php:477
+#, php-format
+msgid "Your host needs to allow outgoing connections to %1$s (port %2$d)."
+msgstr "Dein Hoster muss ausgehende Verbindungen zu %1$s (Port %2$d) erlauben."
+
+#. translators: 1: address of the licence server, e.g. https://smartengin.de, 2: port number.
+#: includes/class-self-client.php:484
+#, php-format
+msgid "Licence server: %1$s (port %2$d)."
+msgstr "Lizenzserver: %1$s (Port %2$d)."
+
+#. translators: %s: the original technical error text, e.g. "cURL error 28: Operation timed out ...".
+#: includes/class-self-client.php:501
+#, php-format
+msgid "(Technical detail: %s)"
+msgstr "(Technische Angabe: %s)"
+
+#: includes/class-self-client.php:837
+msgid "Please enter a licence key."
+msgstr "Bitte gib einen Lizenzschlüssel ein."
+
+#. translators: %d: HTTP status code, e.g. 403 or 503.
+#: includes/class-self-client.php:885
+#, php-format
+msgid "Activation failed. (The licence server answered with HTTP status %d.)"
+msgstr "Aktivierung fehlgeschlagen. (Der Lizenzserver hat mit HTTP-Status %d geantwortet.)"
+
+#: includes/class-self-client.php:889
+msgid "Activation failed."
+msgstr "Aktivierung fehlgeschlagen."
+
+#. translators: %s: changelog URL
+#: includes/class-self-client.php:1243
+#: includes/class-self-client.php:1321
+#, php-format
+msgid "See the full changelog: %s"
+msgstr "Vollständige Änderungsliste: %s"
+
+#: includes/class-self-client.php:1246
+#: includes/class-self-client.php:1324
+msgid "No changelog available."
+msgstr "Keine Änderungsliste vorhanden."
+
+#: includes/class-self-client.php:1394
+msgid "The downloaded update failed its integrity check (SHA-256 mismatch). The update was aborted to protect your site."
+msgstr "Das heruntergeladene Update hat die Echtheitsprüfung nicht bestanden (SHA-256 stimmt nicht überein). Das Update wurde abgebrochen, um deine Website zu schützen."
+
+#. translators: 1: site host, 2: underlying error message.
+#: includes/class-self-client.php:1421
+#, php-format
+msgid "The update could not be installed automatically because the licence server runs on this same site (%1$s): during an update WordPress has to download the package from the site to itself, and your host blocked that self-request (“503 Service Unavailable”). The new version is available — please install it manually via Plugins → Add New → Upload Plugin, or run the licence server on a separate domain. (Technical detail: %2$s)"
+msgstr "Das Update ließ sich nicht automatisch installieren, weil der Lizenzserver auf derselben Website läuft (%1$s): Bei einem Update muss WordPress das Paket von der Website zu sich selbst herunterladen, und dein Hoster hat diese Anfrage an sich selbst gesperrt („503 Service Unavailable“). Die neue Version steht bereit — bitte installiere sie von Hand über Plugins → Neues Plugin hinzufügen → Plugin hochladen, oder betreibe den Lizenzserver auf einer eigenen Domain. (Technische Angabe: %2$s)"
+
+#: includes/class-self-client.php:1442
+msgid "Not allowed."
+msgstr "Nicht erlaubt."
+
+#: includes/class-self-client.php:1636
+msgid "This website has already used its free trial, so it receives no updates."
+msgstr "Diese Website hat ihren kostenlosen Test schon genutzt und bekommt deshalb keine Updates."
+
+#: includes/class-self-client.php:1638
+msgid "This website is not registered for this licence, so it receives no updates."
+msgstr "Diese Website ist für diese Lizenz nicht angemeldet und bekommt deshalb keine Updates."
+
+#: includes/class-self-client.php:1701
+msgid "Not activated."
+msgstr "Nicht aktiviert."
+
+#: includes/class-self-client.php:1713
+msgid "Active — lifetime licence."
+msgstr "Aktiv — unbefristete Lizenz."
+
+#. translators: %s: expiry date
+#: includes/class-self-client.php:1717
+#, php-format
+msgid "Active — valid until %s."
+msgstr "Aktiv — gültig bis %s."
+
+#. translators: %s: date the premium features switch off
+#: includes/class-self-client.php:1729
+#, php-format
+msgid "Expired — the subscription has ended. Premium features stay on until %s, then they switch off. Please renew."
+msgstr "Abgelaufen — das Abo ist beendet. Die Premium-Funktionen bleiben bis %s an, danach schalten sie sich ab. Bitte verlängere es."
+
+#: includes/class-self-client.php:1734
+msgid "Expired — the subscription has ended and premium features are switched off. Renew it to switch them back on."
+msgstr "Abgelaufen — das Abo ist beendet, und die Premium-Funktionen sind abgeschaltet. Verlängere es, um sie wieder einzuschalten."
+
+#: includes/class-self-client.php:1736
+msgid "Expired — the plugin keeps working, but updates are paused. Please renew."
+msgstr "Abgelaufen — das Plugin läuft weiter, aber Updates sind ausgesetzt. Bitte verlängere die Lizenz."
+
+#: includes/class-self-client.php:1740
+msgid "This licence is no longer active."
+msgstr "Diese Lizenz ist nicht mehr aktiv."
+
+#: includes/class-self-client.php:1743
+msgid "This licence key was not recognised."
+msgstr "Dieser Lizenzschlüssel wurde nicht erkannt."
+
+#: includes/class-self-client.php:1746
+msgid "Status unknown."
+msgstr "Status unbekannt."
+
+#: includes/class-self-client.php:1762
+msgid "Licence"
+msgstr "Lizenz"
+
+#: includes/class-self-client.php:1771
+msgid "Licence key"
+msgstr "Lizenzschlüssel"
+
+#: includes/class-self-client.php:1779
+msgid "Activate"
+msgstr "Aktivieren"
+
+#: includes/class-self-client.php:1782
+msgid "Deactivate"
+msgstr "Deaktivieren"
+
+#: includes/class-self-client.php:680
+msgid "no answer in time (time-out)"
+msgstr "keine Antwort in der vorgesehenen Zeit (Zeitüberschreitung)"
+
+#: includes/class-self-client.php:682
+msgid "the name could not be resolved (DNS)"
+msgstr "der Name konnte nicht aufgelöst werden (DNS)"
+
+#: includes/class-self-client.php:684
+msgid "no connection could be opened"
+msgstr "es ließ sich keine Verbindung aufbauen"
+
+#: includes/class-self-client.php:686
+msgid "the certificate check failed"
+msgstr "die Zertifikatsprüfung ist gescheitert"
+
+#: includes/class-self-client.php:688
+msgid "blocked by WordPress itself"
+msgstr "von WordPress selbst gesperrt"
+
+#: includes/class-self-client.php:690
+msgid "another error"
+msgstr "ein anderer Fehler"
+
+#: includes/class-self-client.php:703
+msgid "The connection works. Please activate your licence again now."
+msgstr "Die Verbindung steht. Bitte aktiviere die Lizenz jetzt noch einmal."
+
+#: includes/class-self-client.php:705
+msgid "The licence server can be reached, so activating should work now. WordPress.org could not be reached from your server — that does not affect your licence, but it may affect updates of WordPress itself."
+msgstr "Der Lizenzserver ist erreichbar, das Aktivieren sollte also jetzt gehen. WordPress.org war von deinem Server aus nicht erreichbar — das betrifft deine Lizenz nicht, kann aber die Updates von WordPress selbst betreffen."
+
+#. translators: 1: licence server address, 2: HTTP status code.
+#: includes/class-self-client.php:709
+#, php-format
+msgid "Your server reached %1$s, but the answer was a refusal (HTTP status %2$d). It may come from the licence server itself or from a protection in front of it — this is usually not caused by your host. Please send the text below to the support of this plugin."
+msgstr "Dein Server hat %1$s erreicht, die Antwort war aber eine Ablehnung (HTTP-Status %2$d). Sie kann vom Lizenzserver selbst kommen oder von einem Schutz davor — meist liegt das nicht an deinem Hoster. Bitte schick den Text unten an den Support dieses Plugins."
+
+#. translators: %s: licence server address.
+#: includes/class-self-client.php:716
+#, php-format
+msgid "Your server can reach the internet, but not %s. That is not caused by your key and not by your website. Please send the text below to your host."
+msgstr "Dein Server erreicht das Internet, aber nicht %s. Das liegt nicht an deinem Schlüssel und nicht an deiner Website. Bitte schick den Text unten an deinen Hoster."
+
+#: includes/class-self-client.php:720
+msgid "Your server does not seem to be allowed to open any connections to the outside. Please send the text below to your host."
+msgstr "Dein Server darf offenbar gar keine Verbindungen nach außen aufbauen. Bitte schick den Text unten an deinen Hoster."
+
+#: includes/class-self-client.php:739
+#: includes/class-self-client.php:1555
+msgid "could not be resolved"
+msgstr "konnte nicht aufgelöst werden"
+
+#. translators: 1: HTTP status code, 2: duration in milliseconds.
+#: includes/class-self-client.php:745
+#, php-format
+msgid "reached (HTTP status %1$d, %2$d ms)"
+msgstr "erreicht (HTTP-Status %1$d, %2$d ms)"
+
+#. translators: 1: short reason, e.g. "no answer in time (time-out)", 2: duration in milliseconds.
+#: includes/class-self-client.php:752
+#, php-format
+msgid "NOT reached: %1$s (after %2$d ms)"
+msgstr "NICHT erreicht: %1$s (nach %2$d ms)"
+
+#. translators: 1: domain of the website, 2: date and time of the test.
+#: includes/class-self-client.php:761
+#, php-format
+msgid "Connection test from the website %1$s on %2$s."
+msgstr "Verbindungstest von der Website %1$s am %2$s."
+
+#: includes/class-self-client.php:765
+msgid "A plugin on this website cannot reach its licence server."
+msgstr "Ein Plugin auf dieser Website erreicht seinen Lizenzserver nicht."
+
+#. translators: 1: address, 2: port number.
+#: includes/class-self-client.php:769
+#, php-format
+msgid "Target: %1$s (port %2$d)"
+msgstr "Ziel: %1$s (Port %2$d)"
+
+#. translators: %s: IP addresses, or "could not be resolved".
+#: includes/class-self-client.php:775
+#, php-format
+msgid "IP address resolved by this server: %s"
+msgstr "Von diesem Server aufgelöste IP-Adresse: %s"
+
+#. translators: %s: result, e.g. "NOT reached: no answer in time (time-out) (after 10004 ms)".
+#: includes/class-self-client.php:780
+#, php-format
+msgid "Result: %s"
+msgstr "Ergebnis: %s"
+
+#. translators: %s: the original technical error text.
+#: includes/class-self-client.php:786
+#, php-format
+msgid "Technical detail: %s"
+msgstr "Technische Angabe: %s"
+
+#. translators: 1: address, 2: result, e.g. "reached (HTTP status 200, 120 ms)".
+#: includes/class-self-client.php:793
+#, php-format
+msgid "For comparison, %1$s: %2$s"
+msgstr "Zum Vergleich %1$s: %2$s"
+
+#. translators: %s: address of the licence server.
+#: includes/class-self-client.php:800
+#, php-format
+msgid "Please check whether outgoing connections from this web space to %s are blocked or routed wrongly."
+msgstr "Bitte prüft, ob ausgehende Verbindungen von diesem Webspace zu %s gesperrt oder falsch geleitet werden."
+
+#: includes/class-self-client.php:803
+msgid "Please also tell me the outgoing IP address of this web space (the address its requests leave from — not the address of the website itself)."
+msgstr "Bitte nennt mir außerdem die ausgehende IP-Adresse dieses Webspace (die Adresse, von der seine Anfragen ausgehen — nicht die Adresse der Website selbst)."
+
+#. translators: %s: host name of the licence server.
+#: includes/class-self-client.php:806
+#, php-format
+msgid "And please send me the result of a traceroute from this web space to %s."
+msgstr "Und bitte schickt mir das Ergebnis eines Traceroute von diesem Webspace zu %s."
+
+#: includes/class-self-client.php:1580
+#: includes/class-self-client.php:1800
+msgid "Help with connection problems"
+msgstr "Hilfe bei Verbindungsproblemen"
+
+#. translators: %s: date and time of the last check.
+#: includes/class-self-client.php:1510
+#, php-format
+msgid "Last check: %s"
+msgstr "Letzte Prüfung: %s"
+
+#: includes/class-self-client.php:1516
+msgid "You clicked again within a few seconds, so this is the result of the last check."
+msgstr "Du hast innerhalb weniger Sekunden noch einmal geklickt. Darum steht hier das Ergebnis der letzten Prüfung."
+
+#: includes/class-self-client.php:1522
+msgid "Target"
+msgstr "Ziel"
+
+#: includes/class-self-client.php:1523
+msgid "IP address"
+msgstr "IP-Adresse"
+
+#: includes/class-self-client.php:1524
+msgid "Result"
+msgstr "Ergebnis"
+
+#: includes/class-self-client.php:1525
+msgid "Duration"
+msgstr "Dauer"
+
+#: includes/class-self-client.php:1529
+msgid "Licence server"
+msgstr "Lizenzserver"
+
+#: includes/class-self-client.php:1530
+msgid "WordPress.org (for comparison)"
+msgstr "WordPress.org (zum Vergleich)"
+
+#. translators: %d: HTTP status code.
+#: includes/class-self-client.php:1539
+#, php-format
+msgid "reached (HTTP %d)"
+msgstr "erreicht (HTTP %d)"
+
+#: includes/class-self-client.php:1544
+msgid "not reached"
+msgstr "nicht erreicht"
+
+#. translators: %d: port number.
+#: includes/class-self-client.php:1551
+#, php-format
+msgid "port %d"
+msgstr "Port %d"
+
+#. translators: %d: duration in milliseconds.
+#: includes/class-self-client.php:1560
+#, php-format
+msgid "%d ms"
+msgstr "%d ms"
+
+#: includes/class-self-client.php:1571
+#: includes/class-self-client.php:1573
+msgid "Text for your host"
+msgstr "Text für deinen Hoster"
+
+#: includes/class-self-client.php:1572
+msgid "Send this text to your host’s support. It contains the measured values, and no licence key."
+msgstr "Schick diesen Text an den Support deines Hosters. Er enthält die gemessenen Werte und keinen Lizenzschlüssel."
+
+#: includes/class-self-client.php:1575
+msgid "Copied"
+msgstr "Kopiert"
+
+#: includes/class-self-client.php:1576
+msgid "Copy text"
+msgstr "Text kopieren"
+
+#: includes/class-self-client.php:1789
+msgid "Connection to the licence server"
+msgstr "Verbindung zum Lizenzserver"
+
+#: includes/class-self-client.php:1790
+msgid "If activating does not work, this check finds out where the connection breaks. It asks the licence server and, for comparison, WordPress.org — from the server your website runs on. Your licence key is not sent."
+msgstr "Klappt das Aktivieren nicht, findet diese Prüfung heraus, wo die Verbindung abreißt. Sie fragt den Lizenzserver und zum Vergleich WordPress.org — vom Server aus, auf dem deine Website läuft. Dein Lizenzschlüssel wird dabei nicht mitgeschickt."
+
+#: includes/class-self-client.php:1792
+msgid "Check connection"
+msgstr "Verbindung prüfen"

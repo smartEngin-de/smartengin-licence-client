@@ -52,9 +52,21 @@ if ( ! defined( 'ABSPATH' ) ) {
 // must ship the SAME library version; an old copy in any one plugin silently
 // downgrades the library for all of them.
 if ( ! defined( 'SELF_CLIENT_VERSION' ) ) {
-	define( 'SELF_CLIENT_VERSION', '0.8.0' );
+	define( 'SELF_CLIENT_VERSION', '0.8.3' );
 }
 
 if ( ! class_exists( 'Self_Client' ) ) {
 	require_once __DIR__ . '/includes/class-self-client.php';
+}
+
+// Translations of the library's own texts (0.8.1). Before, no product shipped
+// any for this text domain, so a German backend showed the library's messages
+// in English. Registering the folder (as load_plugin_textdomain() does since
+// WP 6.1) lets WordPress load the file just in time and follow
+// switch_to_locale(). Deliberately OUTSIDE the class_exists() guard: the copy
+// whose class wins may be an older one without a languages folder.
+if ( is_dir( __DIR__ . '/languages' ) && isset( $GLOBALS['wp_textdomain_registry'] )
+	&& is_object( $GLOBALS['wp_textdomain_registry'] )
+	&& method_exists( $GLOBALS['wp_textdomain_registry'], 'set_custom_path' ) ) {
+	$GLOBALS['wp_textdomain_registry']->set_custom_path( 'smartengin-licence-client', __DIR__ . '/languages' );
 }
